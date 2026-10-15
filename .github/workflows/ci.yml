@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Pytest
+        run: python -m pytest
+
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck deploy/install.sh deploy/make_archive.sh deploy/ssh_install.sh scripts/check_workflows.sh
+
+      - name: Workflow policy
+        run: bash scripts/check_workflows.sh
+
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          expected=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          workdir=$(mktemp -d)
+          trap 'rm -rf -- "$workdir"' EXIT
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "${workdir}/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          echo "${expected}  ${archive}" | (cd "$workdir" && sha256sum -c -)
+          tar -C "$workdir" -xzf "${workdir}/${archive}" actionlint
+          "$workdir/actionlint" -color
+
+      - name: gitleaks
+        run: |
+          set -euo pipefail
+          version=8.30.1
+          expected=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          workdir=$(mktemp -d)
+          trap 'rm -rf -- "$workdir"' EXIT
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "${workdir}/${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}"
+          echo "${expected}  ${archive}" | (cd "$workdir" && sha256sum -c -)
+          tar -C "$workdir" -xzf "${workdir}/${archive}" gitleaks
+          "$workdir/gitleaks" detect --source . --redact

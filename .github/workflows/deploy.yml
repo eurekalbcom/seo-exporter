@@ -1,0 +1,54 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seo-readonly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: seo-readonly
+    permissions:
+      contents: read
+    steps:
+      - name: HOLD guard (fail-closed)
+        env:
+          DEPLOY_ENABLED: ${{ vars.SEO_DEPLOY_ENABLED }}
+          TS_OAUTH: ${{ secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY }}
+        run: |
+          if [ "$DEPLOY_ENABLED" != "true" ]; then echo "HOLD: SEO_DEPLOY_ENABLED != true"; exit 1; fi
+          [ -n "$TS_OAUTH" ] || { echo "missing Tailscale OAuth secret"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # Inputs checked against tailscale/github-action v4.2.0 action.yml:
+      # oauth-client-id, oauth-secret, tags. That release has no ephemeral
+      # input; src/main.ts appends ephemeral=true on the OAuth auth key.
+      - name: Tailscale
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd
+        with:
+          oauth-client-id: ${{ fromJSON(secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY).client_id }}
+          oauth-secret: ${{ fromJSON(secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY).client_secret }}
+          tags: tag:gh-seo-deploy
+          version: "1.94.2"
+
+      - name: Install over SSH
+        env:
+          SEO_TARGET_HOST: ${{ vars.EUK_VAR_SEO_TARGET_HOST }}
+          SEO_TARGET_HOSTKEY: ${{ vars.EUK_VAR_SEO_TARGET_HOSTKEY }}
+          SSH_KEY: ${{ secrets.EUK_SSH_SEO_DEPLOY_V8QX }}
+          GSC_JSON: ${{ secrets.EUK_OAUTH_GSC_READONLY }}
+          BING_JSON: ${{ secrets.EUK_OAUTH_BING_READONLY }}
+        run: bash deploy/ssh_install.sh
