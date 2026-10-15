@@ -59,7 +59,7 @@ def test_deploy_contract() -> None:
     assert "GSC_JSON: ${{ secrets.EUK_OAUTH_GSC_READONLY }}" in text
     assert "BING_JSON: ${{ secrets.EUK_OAUTH_BING_READONLY }}" in text
     assert "run: bash deploy/ssh_install.sh" in text
-    assert "run: |" not in text
+    assert text.count("run: |") == 1
     assert "toJSON(" not in text
     assert "EUK_OAUTH_GSC_READONLY:" not in text
     assert "EUK_OAUTH_BING_READONLY:" not in text
@@ -70,6 +70,120 @@ def test_deploy_contract() -> None:
         action, pin = use.split("@", 1)
         assert action in ALLOWED_ACTIONS
         assert _SHA.fullmatch(pin)
+
+
+def _deploy_steps_span(lines: list[str]) -> tuple[int, int]:
+    jobs = next((index for index, line in enumerate(lines) if line == "jobs:"), None)
+    if jobs is None:
+        raise AssertionError("jobs missing")
+    deploy = None
+    for index in range(jobs + 1, len(lines)):
+        line = lines[index]
+        if line and not line.startswith(" "):
+            break
+        if line == "  deploy:":
+            deploy = index
+            break
+    if deploy is None:
+        raise AssertionError("deploy job missing")
+    job_end = len(lines)
+    for index in range(deploy + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("  ") and not line.startswith("   "):
+            job_end = index
+            break
+        if line and not line.startswith(" "):
+            job_end = index
+            break
+    steps = next(
+        (
+            index
+            for index in range(deploy + 1, job_end)
+            if lines[index] == "    steps:"
+        ),
+        None,
+    )
+    if steps is None:
+        raise AssertionError("deploy steps missing")
+    steps_end = job_end
+    for index in range(steps + 1, job_end):
+        line = lines[index]
+        if line.startswith("    ") and not line.startswith("     ") and line.strip():
+            steps_end = index
+            break
+    return steps + 1, steps_end
+
+
+def _deploy_step_chunks(text: str) -> list[str]:
+    lines = text.splitlines(keepends=True)
+    bare = [line.rstrip("\r\n") for line in lines]
+    start, end = _deploy_steps_span(bare)
+    chunks: list[list[str]] = []
+    for line, bare_line in zip(lines[start:end], bare[start:end], strict=True):
+        if bare_line.startswith("      - name:"):
+            chunks.append([line])
+        elif chunks:
+            chunks[-1].append(line)
+        elif bare_line.strip():
+            raise AssertionError(f"content before the first deploy step: {bare_line}")
+    if not chunks:
+        raise AssertionError("deploy job has no steps")
+    return ["".join(chunk) for chunk in chunks]
+
+
+def _require_hold_guard(text: str) -> None:
+    chunks = _deploy_step_chunks(text)
+    first = chunks[0]
+    assert first.startswith(
+        "      - name: HOLD guard (fail-closed)\n"
+    ), "HOLD guard must be the first deploy step"
+    assert "DEPLOY_ENABLED: ${{ vars.SEO_DEPLOY_ENABLED }}" in first
+    assert "TS_OAUTH: ${{ secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY }}" in first
+    assert (
+        'if [ "$DEPLOY_ENABLED" != "true" ]; then echo "HOLD: SEO_DEPLOY_ENABLED != true"; exit 1; fi'
+        in first
+    )
+    assert (
+        '[ -n "$TS_OAUTH" ] || { echo "missing Tailscale OAuth secret"; exit 1; }'
+        in first
+    )
+    run_at = first.index("run: |")
+    script = first[run_at:]
+    assert "${{" not in script
+    assert "secrets." not in script
+    assert "set -x" not in script
+    assert 'echo "$TS_OAUTH"' not in script
+    assert 'echo "$DEPLOY_ENABLED"' not in script
+
+
+def test_deploy_hold_guard_is_first_step() -> None:
+    text = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
+    _require_hold_guard(text)
+    names = [
+        chunk.split("\n", 1)[0].split(":", 1)[1].strip()
+        for chunk in _deploy_step_chunks(text)
+    ]
+    assert names[0] == "HOLD guard (fail-closed)"
+    assert "Checkout" in names
+    assert "Tailscale" in names
+    assert names.index("HOLD guard (fail-closed)") < names.index("Checkout")
+    assert names.index("HOLD guard (fail-closed)") < names.index("Tailscale")
+
+
+def test_deploy_hold_guard_rejects_missing_and_moved() -> None:
+    text = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    bare = [line.rstrip("\r\n") for line in lines]
+    start, end = _deploy_steps_span(bare)
+    prefix = "".join(lines[:start])
+    suffix = "".join(lines[end:])
+    chunks = _deploy_step_chunks(text)
+    missing = prefix + "".join(chunks[1:]) + suffix
+    with pytest.raises(AssertionError, match="HOLD guard"):
+        _require_hold_guard(missing)
+    moved = prefix + chunks[1] + chunks[0] + "".join(chunks[2:]) + suffix
+    with pytest.raises(AssertionError, match="HOLD guard"):
+        _require_hold_guard(moved)
 
 
 def test_no_pull_request_target_anywhere() -> None:

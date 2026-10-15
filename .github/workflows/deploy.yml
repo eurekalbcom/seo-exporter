@@ -20,6 +20,14 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: HOLD guard (fail-closed)
+        env:
+          DEPLOY_ENABLED: ${{ vars.SEO_DEPLOY_ENABLED }}
+          TS_OAUTH: ${{ secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY }}
+        run: |
+          if [ "$DEPLOY_ENABLED" != "true" ]; then echo "HOLD: SEO_DEPLOY_ENABLED != true"; exit 1; fi
+          [ -n "$TS_OAUTH" ] || { echo "missing Tailscale OAuth secret"; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
