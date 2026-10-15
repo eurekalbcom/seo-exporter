@@ -6,9 +6,10 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 from typing import Literal, NoReturn
+from zoneinfo import ZoneInfo
 
 from seo_exporter.bing import fetch_query_stats
 from seo_exporter.credentials import OAuthClient, load_provider_clients
@@ -30,6 +31,7 @@ from seo_exporter.settings import Settings, load_settings
 
 logger = logging.getLogger("seo_exporter")
 ProviderName = Literal["gsc", "bing"]
+_WallClock = Callable[[tzinfo], datetime]
 
 
 def run_once(
@@ -44,6 +46,7 @@ def run_once(
     *,
     today: date | None = None,
     now: Callable[[], float] | None = None,
+    clock: _WallClock | None = None,
 ) -> None:
     """Scrape both providers and update the registry.
 
@@ -58,8 +61,16 @@ def run_once(
         redactor: Secret redactor.
         today: Override for the Search Console window.
         now: Monotonic clock used for token expiry.
+        clock: Wall clock used when ``today`` is omitted. Defaults to
+            ``datetime.now``. The Search Console day is that clock's current
+            date in America/Los_Angeles.
     """
-    current_day = date.today() if today is None else today
+    if today is not None:
+        current_day = today
+    elif clock is None:
+        current_day = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+    else:
+        current_day = clock(ZoneInfo("America/Los_Angeles")).date()
     _scrape(
         "gsc",
         settings,

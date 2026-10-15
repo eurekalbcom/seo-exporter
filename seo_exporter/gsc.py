@@ -24,7 +24,7 @@ def date_window(today: date, lookback_days: int, lag_days: int) -> tuple[str, st
     """Return inclusive ``startDate`` and ``endDate`` strings.
 
     Args:
-        today: Current date in UTC.
+        today: Current date in America/Los_Angeles.
         lookback_days: Number of days in the window.
         lag_days: Days to step back from today so partial data is excluded.
 

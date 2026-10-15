@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import urllib.request
-from datetime import date
+from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,7 @@ SENTINEL = "query-sentinel-value"
 class FakeHttp:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.bodies: list[bytes | None] = []
 
     def __call__(
         self,
@@ -36,6 +37,7 @@ class FakeHttp:
         timeout: float | None,
     ) -> bytes:
         self.calls.append(url)
+        self.bodies.append(body)
         if "oauth2.googleapis.com" in url:
             return json.dumps(
                 {"access_token": "access-token-test", "expires_in": 3600}
@@ -121,6 +123,40 @@ def test_run_once_updates_metrics_without_leaking_query(
         assert mode == 0o600
     finally:
         logger.removeFilter(redactor)
+
+
+def test_run_once_gsc_window_uses_pacific_date(tmp_path: Path) -> None:
+    redactor = Redactor()
+    http = FakeHttp()
+    gsc = OAuthClient("client-id-test", "client-secret-test", "refresh-token-test")
+    bing = OAuthClient("bing-client-id", "bing-client-secret", "bing-refresh-test")
+    redactor.add(gsc.client_secret)
+    redactor.add(bing.client_secret)
+    moment = datetime(2026, 10, 15, 2, 0, tzinfo=UTC)
+
+    def clock(zone: tzinfo) -> datetime:
+        return moment.astimezone(zone)
+
+    run_once(
+        _settings(tmp_path),
+        gsc,
+        bing,
+        AccessSession(gsc.refresh_token),
+        AccessSession(bing.refresh_token),
+        Registry(),
+        http,
+        redactor,
+        now=lambda: 0.0,
+        clock=clock,
+    )
+    raw = next(
+        body
+        for url, body in zip(http.calls, http.bodies, strict=True)
+        if "searchAnalytics" in url
+    )
+    encoded = json.loads(raw or b"{}")
+    assert encoded["startDate"] == "2026-09-14"
+    assert encoded["endDate"] == "2026-10-11"
 
 
 def test_redactor_rewrites_log_records(caplog: pytest.LogCaptureFixture) -> None:
