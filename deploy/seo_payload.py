@@ -90,27 +90,6 @@ def canonicalize_credential(raw: bytes) -> bytes:
     return json.dumps(cleaned, separators=(",", ":")).encode()
 
 
-def decode_json_string(raw: bytes) -> str:
-    """Decode a JSON string produced by GitHub ``toJSON``.
-
-    Args:
-        raw: JSON document whose top-level value is a string.
-
-    Returns:
-        The string value.
-
-    Raises:
-        ValueError: The document is not a JSON string.
-    """
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        raise ValueError("json string rejected") from None
-    if not isinstance(value, str):
-        raise ValueError("json string rejected")
-    return value
-
-
 def _check_size(name: str, blob: bytes, limit: int) -> None:
     if len(blob) > limit:
         raise ValueError(f"{name} section rejected")

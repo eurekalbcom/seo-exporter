@@ -1,7 +1,7 @@
-"""Write a deploy payload to stdout from an archive and two JSON strings.
+"""Write a deploy payload to stdout from an archive and two credential objects.
 
-File descriptor 3 is the Google credential as a JSON string (GitHub ``toJSON``).
-File descriptor 4 is the Bing credential in the same form. Nothing is logged.
+File descriptor 3 is the raw Google credential JSON object.
+File descriptor 4 is the raw Bing credential JSON object. Nothing is logged.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ def main() -> int:
         return 2
     try:
         code = Path(sys.argv[1]).read_bytes()
-        gsc = seo_payload.decode_json_string(_read_fd(3)).encode()
-        bing = seo_payload.decode_json_string(_read_fd(4)).encode()
+        gsc = seo_payload.canonicalize_credential(_read_fd(3))
+        bing = seo_payload.canonicalize_credential(_read_fd(4))
         sys.stdout.buffer.write(seo_payload.encode_payload(code, gsc, bing))
     except (OSError, ValueError):
         print("deploy payload rejected", file=sys.stderr)

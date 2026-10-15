@@ -38,7 +38,7 @@ jobs:
       - name: Shellcheck
         run: |
           set -euo pipefail
-          shellcheck deploy/install.sh deploy/make_archive.sh scripts/check_workflows.sh
+          shellcheck deploy/install.sh deploy/make_archive.sh deploy/ssh_install.sh scripts/check_workflows.sh
 
       - name: Workflow policy
         run: bash scripts/check_workflows.sh

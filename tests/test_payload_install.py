@@ -39,7 +39,6 @@ def test_payload_roundtrip_and_rejected_text() -> None:
     with pytest.raises(ValueError) as caught:
         payload.canonicalize_credential(b'{"client_secret": "client-secret-test"')
     assert SECRET not in str(caught.value)
-    assert payload.decode_json_string(json.dumps("plain-text").encode()) == "plain-text"
 
 
 def test_archive_rejects_traversal_and_extra_members(
@@ -147,16 +146,12 @@ def test_emit_stdin_and_ssh_key(tmp_path: Path) -> None:
     bing_read, bing_write = os.pipe()
     os.write(
         gsc_write,
-        json.dumps(
-            '{"client_id":"a","client_secret":"client-secret-test","refresh_token":"r"}'
-        ).encode(),
+        b'{"client_id":"a","client_secret":"client-secret-test","refresh_token":"r"}',
     )
     os.close(gsc_write)
     os.write(
         bing_write,
-        json.dumps(
-            '{"client_id":"b","client_secret":"bing-secret-test","refresh_token":"r"}'
-        ).encode(),
+        b'{"client_id":"b","client_secret":"bing-secret-test","refresh_token":"r"}',
     )
     os.close(bing_write)
     wrapper = (
@@ -190,7 +185,7 @@ def test_emit_stdin_and_ssh_key(tmp_path: Path) -> None:
     key_path = tmp_path / "id"
     key_run = subprocess.run(
         [sys.executable, str(ROOT / "deploy" / "write_ssh_key.py"), str(key_path)],
-        input=json.dumps("ssh-test-line\n").encode(),
+        input=b"ssh-test-line",
         check=False,
         capture_output=True,
     )

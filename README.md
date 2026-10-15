@@ -32,8 +32,6 @@ There are no separate `*_CLIENT_ID` variables. Client ids live inside the JSON s
 | `EUK_VAR_SEO_TARGET_HOST` | Target host for the deploy. Value is not committed. |
 | `EUK_VAR_SEO_TARGET_HOSTKEY` | One OpenSSH `known_hosts` line for that host. |
 
-> **Pending CISO name approval:** `EUK_VAR_SEO_TARGET_HOSTKEY` is the known_hosts variable. Do not rename it until the CISO approves the name. The deploy workflow reads that exact name.
-
 ## Tailscale action
 
 Checked against `tailscale/github-action` tag `v4.2.0` (`d1b6cd204f8dceda5b3eaad7f1f767be390056cd`):
@@ -94,7 +92,7 @@ Logs record provider, row count, duration, and a stable error reason. They do no
 4. Install `deploy/authorized_keys.example` as `~seo-deploy/.ssh/authorized_keys` after replacing `REPLACE_WITH_DEPLOY_PUBLIC_KEY` with the public key for `EUK_SSH_SEO_DEPLOY_V8QX`. The line is `restrict` plus a forced command. The account cannot allocate a TTY, forward ports, or run another command.
 5. Put one `known_hosts` line in `EUK_VAR_SEO_TARGET_HOSTKEY`. Deploy uses `StrictHostKeyChecking=yes` and that file. Do not use trust-on-first-use.
 6. Create `/etc/seo-exporter/environment` with the two site variables. The disk that holds `/var/lib/systemd/credential.secret` should be encrypted; `systemd-creds` warns when it is not.
-7. Push to `main`. The deploy job joins the tailnet, then sends the code archive and the two provider secrets on SSH stdin. They are not process arguments, environment variables, or log lines. `deploy/install.sh` encrypts each credential with `systemd-creds encrypt --name=... --with-key=auto` into `/etc/credstore.encrypted/`, mode `0400`, root-owned, and installs `deploy/seo-exporter.service` (`LoadCredentialEncrypted`, `DynamicUser`, `NoNewPrivileges`, `ProtectSystem=strict`, and the rest of the unit). `MemoryDenyWriteExecute` is omitted because CPython needs to map executable pages.
+7. Push to `main`. The deploy job joins the tailnet. The Install over SSH step receives `SSH_KEY`, `GSC_JSON`, and `BING_JSON` in its environment. If either provider secret is empty or not valid credential JSON, the job exits before it creates a temporary directory or starts SSH, and the host is left unchanged. Otherwise the step feeds each provider secret to the remote on stdin with `printf '%s'` and process substitution on file descriptors 3 and 4. The SSH command line carries the host and the key file. `deploy/install.sh` encrypts each credential with `systemd-creds encrypt --name=... --with-key=auto` into `/etc/credstore.encrypted/`, mode `0400`, root-owned, and installs `deploy/seo-exporter.service` (`LoadCredentialEncrypted`, `DynamicUser`, `NoNewPrivileges`, `ProtectSystem=strict`, and the rest of the unit). `MemoryDenyWriteExecute` is omitted because CPython needs to map executable pages.
 
 The first deploy does not start the service until `/etc/seo-exporter/environment` contains both site variables. Later deploys restart it.
 
@@ -105,7 +103,7 @@ Grafana, on the same host, scrapes `http://127.0.0.1:9108/metrics`.
 ```bash
 python3 -m pip install -r requirements-dev.txt
 python3 -m pytest
-shellcheck deploy/install.sh deploy/make_archive.sh scripts/check_workflows.sh
+shellcheck deploy/install.sh deploy/make_archive.sh deploy/ssh_install.sh scripts/check_workflows.sh
 ```
 
 CI also runs actionlint and a sha256-checked gitleaks binary, and fails if any workflow uses `pull_request_target`.

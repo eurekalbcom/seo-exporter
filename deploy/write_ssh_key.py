@@ -1,4 +1,4 @@
-"""Write an SSH private key from a JSON string on stdin. The key is not logged."""
+"""Write an SSH private key from raw stdin. The key is not logged."""
 
 from __future__ import annotations
 
@@ -6,10 +6,6 @@ import os
 import stat
 import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import seo_payload
 
 
 def main() -> int:
@@ -23,8 +19,8 @@ def main() -> int:
         return 2
     dest = Path(sys.argv[1])
     try:
-        text = seo_payload.decode_json_string(sys.stdin.buffer.read())
-    except ValueError:
+        text = sys.stdin.buffer.read().decode("utf-8")
+    except UnicodeDecodeError:
         print("ssh key payload rejected", file=sys.stderr)
         return 1
     if not text.strip():
