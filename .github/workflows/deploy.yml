@@ -1,0 +1,96 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seo-readonly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: seo-readonly
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      # Inputs checked against tailscale/github-action v4.2.0 action.yml:
+      # oauth-client-id, oauth-secret, tags. That release has no ephemeral
+      # input; src/main.ts appends ephemeral=true on the OAuth auth key.
+      - name: Tailscale
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd
+        with:
+          oauth-client-id: ${{ fromJSON(secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY).client_id }}
+          oauth-secret: ${{ fromJSON(secrets.EUK_OAUTH_TAILSCALE_SEO_DEPLOY).client_secret }}
+          tags: tag:gh-seo-deploy
+          version: "1.94.2"
+
+      - name: Install over SSH
+        env:
+          SEO_TARGET_HOST: ${{ vars.EUK_VAR_SEO_TARGET_HOST }}
+          SEO_TARGET_HOSTKEY: ${{ vars.EUK_VAR_SEO_TARGET_HOSTKEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          if [[ -z "${SEO_TARGET_HOST}" ]]; then
+            printf '%s\n' "target host variable is empty" >&2
+            exit 1
+          fi
+          if [[ -z "${SEO_TARGET_HOSTKEY}" ]]; then
+            printf '%s\n' "target host key variable is empty" >&2
+            exit 1
+          fi
+          case "${SEO_TARGET_HOST}" in
+            *[!A-Za-z0-9._:-]*)
+              printf '%s\n' "target host variable is invalid" >&2
+              exit 1
+              ;;
+          esac
+
+          workdir=$(mktemp -d)
+          trap 'rm -rf -- "$workdir"' EXIT
+          keyfile="${workdir}/id"
+          known="${workdir}/known_hosts"
+          archive="${workdir}/code.tar.gz"
+          install -m 0600 /dev/null "${keyfile}"
+          install -m 0600 /dev/null "${known}"
+
+          python3 deploy/write_ssh_key.py "${keyfile}" <<'SEO_SSH_KEY'
+          ${{ toJSON(secrets.EUK_SSH_SEO_DEPLOY_V8QX) }}
+          SEO_SSH_KEY
+
+          printf '%s\n' "${SEO_TARGET_HOSTKEY}" > "${known}"
+          bash deploy/make_archive.sh "${archive}"
+
+          python3 deploy/emit_stdin.py "${archive}" 3<<'SEO_GSC_JSON' 4<<'SEO_BING_JSON' \
+            | ssh \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${known}" \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o PreferredAuthentications=publickey \
+              -o PasswordAuthentication=no \
+              -o KbdInteractiveAuthentication=no \
+              -o PubkeyAuthentication=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=15 \
+              -o LogLevel=ERROR \
+              -i "${keyfile}" \
+              -- \
+              "seo-deploy@${SEO_TARGET_HOST}"
+          ${{ toJSON(secrets.EUK_OAUTH_GSC_READONLY) }}
+          SEO_GSC_JSON
+          ${{ toJSON(secrets.EUK_OAUTH_BING_READONLY) }}
+          SEO_BING_JSON

@@ -1,0 +1,1 @@
+restrict,command="sudo --non-interactive /usr/local/sbin/seo-exporter-install" ssh-ed25519 REPLACE_WITH_DEPLOY_PUBLIC_KEY seo-deploy

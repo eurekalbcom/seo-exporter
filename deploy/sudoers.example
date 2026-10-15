@@ -1,0 +1,5 @@
+# Install with: visudo -cf deploy/sudoers.example && install -m 0440 deploy/sudoers.example /etc/sudoers.d/seo-exporter-deploy
+# log_input and log_output stay off so the deploy payload on stdin is not recorded.
+Defaults:seo-deploy !use_pty
+Defaults!/usr/local/sbin/seo-exporter-install !log_input, !log_output
+seo-deploy ALL=(root) NOPASSWD: /usr/local/sbin/seo-exporter-install

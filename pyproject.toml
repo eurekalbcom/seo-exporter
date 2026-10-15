@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seo-exporter"
+version = "0.1.0"
+description = "Read-only Google Search Console and Bing Webmaster metrics exporter."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.5"]
+
+[project.scripts]
+seo-exporter = "seo_exporter.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["seo_exporter*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
