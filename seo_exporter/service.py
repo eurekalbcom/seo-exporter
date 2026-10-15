@@ -59,7 +59,7 @@ def run_once(
         today: Override for the Search Console window.
         now: Monotonic clock used for token expiry.
     """
-    current_day = date.today() if today is None else today
+    current_day = datetime.now(UTC).date() if today is None else today
     _scrape(
         "gsc",
         settings,
