@@ -114,11 +114,45 @@ describe("redactUrl", () => {
     expect(redactUrl('"Authorization":"Basic dXNlcjpwYXNz"')).toBe(
       '"Authorization":"[REDACTED]"'
     );
-    expect(redactUrl("Authorization: sekret keep-me")).toBe("Authorization: [REDACTED] keep-me");
-    expect(redactUrl("Authorization: Basic sekret keep-me")).toBe(
-      "Authorization: [REDACTED] keep-me"
-    );
-    expect(redactUrl("Bearer sekret keep-me")).toBe("Bearer [REDACTED] keep-me");
+    expect(redactUrl('{\\"apikey\\":\\"sek\\"}')).toBe('{\\"apikey\\":\\"[REDACTED]\\"}');
+  });
+
+  it("redacts every Authorization scheme through the end of its value", () => {
+    const token = "Authorization: Token xyz-token-9f3a";
+    const bot = "Authorization: Bot bot-secret-9f3a";
+    const apiKey = "Authorization: ApiKey sk-live-9f3a";
+    const digest =
+      'Authorization: Digest username="alice", realm="example.com", nonce="nonce-9f3a", uri="/x", response="digest-response-9f3a"';
+    const aws4 =
+      "Authorization: AWS4-HMAC-SHA256 Credential=AKIAFAKE0000000000/20130524/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=signature-9f3a";
+    const lower = "authorization: Token xyz-token-9f3a";
+    const quotedBearer = '"Bearer abc def"';
+
+    expect(redactUrl(token)).toBe("Authorization: [REDACTED]");
+    expect(redactUrl(bot)).toBe("Authorization: [REDACTED]");
+    expect(redactUrl(apiKey)).toBe("Authorization: [REDACTED]");
+    expect(redactUrl(digest)).toBe("Authorization: [REDACTED]");
+    expect(redactUrl(aws4)).toBe("Authorization: [REDACTED]");
+    expect(redactUrl(lower)).toBe("authorization: [REDACTED]");
+    expect(redactUrl(quotedBearer)).toBe('"Bearer [REDACTED]"');
+
+    for (const secret of [
+      "xyz-token-9f3a",
+      "bot-secret-9f3a",
+      "sk-live-9f3a",
+      "alice",
+      "example.com",
+      "nonce-9f3a",
+      "digest-response-9f3a",
+      "AKIAFAKE0000000000",
+      "signature-9f3a",
+      "abc",
+      "def",
+    ]) {
+      expect(redactUrl(`${token}\n${bot}\n${apiKey}\n${digest}\n${aws4}\n${lower}\n${quotedBearer}`)).not.toContain(
+        secret
+      );
+    }
   });
 
   it("leaves the text in place when the key is empty", () => {

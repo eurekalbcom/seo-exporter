@@ -53,13 +53,128 @@ function replaceSecret(value: string, secret: string): string {
 
 const SENSITIVE_QUERY =
   /([?&#](?:access_token|refresh_token|client_secret|api_key|apikey|token)=)[^&#\s"'<>]*/gi;
-const JSON_SECRET =
-  /(["'])(access_token|refresh_token|client_secret|api_key|apikey|token)\1(\s*:\s*)(["'])(?:\\.|[^\\])*?\4/gi;
-// A quote may sit between the header name and the colon (`"Authorization":"Basic …"`).
-// Only Bearer/Basic take a second token, so the word after the value stays.
-const AUTHORIZATION =
-  /(authorization["']?\s*:\s*["']?)(?:(?:bearer|basic)\s+)?[^\s"']+/gi;
-const BEARER = /\bbearer\s+\S+/gi;
+const JSON_KEY =
+  /\\?(["'])(access_token|refresh_token|client_secret|api_key|apikey|token)\\?\1\s*:\s*/gi;
+const AUTHORIZATION_MARK = /authorization["']?\s*:\s*/gi;
+const BEARER_MARK = /\bbearer\b/gi;
+
+function closingQuote(value: string, start: number, quote: string, escaped: boolean): number {
+  for (let i = start; i < value.length; i++) {
+    if (!escaped && value[i] === "\\") {
+      i += 1;
+      continue;
+    }
+    if (escaped && value[i] === "\\" && value[i + 1] === "\\" && value[i + 2] === quote) {
+      i += 2;
+      continue;
+    }
+    if (escaped && value[i] === "\\" && value[i + 1] === quote) return i + 1;
+    if (!escaped && value[i] === quote) return i;
+  }
+  return value.length;
+}
+
+/** A comma ends an unquoted header unless it continues `name=` pairs (Digest, AWS4). */
+function endOfAuthValue(value: string, start: number): number {
+  let quote = "";
+  for (let i = start; i < value.length; i++) {
+    const ch = value[i];
+    if (quote) {
+      if (ch === "\\") {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "\n") return i;
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "," && !/^\s*[A-Za-z0-9_-]+=/.test(value.slice(i + 1))) return i;
+  }
+  return value.length;
+}
+
+/**
+ * Any scheme, through the closing quote, a comma that does not continue
+ * `name=` pairs, or the end of the line.
+ */
+function redactAuthorization(value: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const match of value.matchAll(AUTHORIZATION_MARK)) {
+    const index = match.index ?? 0;
+    if (index < cursor) continue;
+    const openAt = index + match[0].length;
+    result += value.slice(cursor, openAt);
+    if (value[openAt] === '"' || value[openAt] === "'") {
+      const quote = value[openAt];
+      const end = closingQuote(value, openAt + 1, quote, false);
+      result += quote + REDACTED;
+      if (end < value.length && value[end] === quote) {
+        result += quote;
+        cursor = end + 1;
+      } else {
+        cursor = end;
+      }
+      continue;
+    }
+    result += REDACTED;
+    cursor = endOfAuthValue(value, openAt);
+  }
+  return result + value.slice(cursor);
+}
+
+function redactBearer(value: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const match of value.matchAll(BEARER_MARK)) {
+    const index = match.index ?? 0;
+    if (index < cursor) continue;
+    const before = value[index - 1];
+    result += value.slice(cursor, index) + match[0];
+    const after = index + match[0].length;
+    if (before === '"' || before === "'") {
+      const end = closingQuote(value, after, before, false);
+      result += " " + REDACTED;
+      cursor = end;
+      continue;
+    }
+    result += " " + REDACTED;
+    cursor = endOfAuthValue(value, after);
+  }
+  return result + value.slice(cursor);
+}
+
+function redactJsonSecrets(value: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const match of value.matchAll(JSON_KEY)) {
+    const index = match.index ?? 0;
+    if (index < cursor) continue;
+    let i = index + match[0].length;
+    const escaped = value[i] === "\\";
+    if (escaped) i += 1;
+    const quote = value[i];
+    if (quote !== '"' && quote !== "'") {
+      result += value.slice(cursor, i);
+      cursor = i;
+      continue;
+    }
+    const end = closingQuote(value, i + 1, quote, escaped);
+    result += value.slice(cursor, i) + quote + REDACTED;
+    if (end < value.length && value[end] === quote) {
+      if (escaped && value[end - 1] === "\\") result += "\\";
+      result += quote;
+      cursor = end + 1;
+    } else {
+      cursor = end;
+    }
+  }
+  return result + value.slice(cursor);
+}
 
 /**
  * Replaces sensitive query values, JSON secrets, and `Authorization` /
@@ -74,15 +189,9 @@ export function redactUrl(value: string, apiKey?: string): string {
       redacted = replaceSecret(redacted, secret);
     }
   }
-  return redacted
-    .replace(SENSITIVE_QUERY, `$1${REDACTED}`)
-    .replace(
-      JSON_SECRET,
-      (_match, keyQuote: string, name: string, colon: string, valueQuote: string) =>
-        `${keyQuote}${name}${keyQuote}${colon}${valueQuote}${REDACTED}${valueQuote}`
-    )
-    .replace(AUTHORIZATION, `$1${REDACTED}`)
-    .replace(BEARER, `Bearer ${REDACTED}`);
+  return redactBearer(
+    redactAuthorization(redactJsonSecrets(redacted.replace(SENSITIVE_QUERY, `$1${REDACTED}`)))
+  );
 }
 
 function constructLike(error: Error, message: string, cause: unknown): Error {
