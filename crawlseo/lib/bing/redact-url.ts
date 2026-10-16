@@ -159,6 +159,61 @@ function redactBearer(value: string): string {
   return result + value.slice(cursor);
 }
 
+/**
+ * End of a `[` / `{` value. Quoted strings, including `\"`, do not change depth.
+ * An unclosed value stops at the end of the line.
+ */
+function endOfJsonContainer(value: string, openAt: number): number {
+  const stack: string[] = [];
+  let quote = "";
+  let escapedQuote = false;
+  for (let i = openAt; i < value.length; i++) {
+    const ch = value[i];
+    if (quote) {
+      if (ch === "\n") return i;
+      if (escapedQuote) {
+        if (ch === "\\" && value[i + 1] === "\\" && value[i + 2] === quote) {
+          i += 2;
+          continue;
+        }
+        if (ch === "\\" && value[i + 1] === quote) {
+          quote = "";
+          i += 1;
+          continue;
+        }
+        continue;
+      }
+      if (ch === "\\") {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "\n") return i;
+    if (ch === "\\" && (value[i + 1] === '"' || value[i + 1] === "'")) {
+      quote = value[i + 1];
+      escapedQuote = true;
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      escapedQuote = false;
+      continue;
+    }
+    if (ch === "[" || ch === "{") {
+      stack.push(ch === "[" ? "]" : "}");
+      continue;
+    }
+    if ((ch === "]" || ch === "}") && stack[stack.length - 1] === ch) {
+      stack.pop();
+      if (stack.length === 0) return i + 1;
+    }
+  }
+  return value.length;
+}
+
 function redactJsonSecrets(value: string): string {
   let result = "";
   let cursor = 0;
@@ -171,13 +226,17 @@ function redactJsonSecrets(value: string): string {
     const quote = value[i];
     if (quote !== '"' && quote !== "'") {
       let end = i;
-      while (
-        end < value.length &&
-        value[end] !== "," &&
-        value[end] !== "}" &&
-        value[end] !== "\n"
-      ) {
-        end += 1;
+      if (quote === "[" || quote === "{") {
+        end = endOfJsonContainer(value, i);
+      } else {
+        while (
+          end < value.length &&
+          value[end] !== "," &&
+          value[end] !== "}" &&
+          value[end] !== "\n"
+        ) {
+          end += 1;
+        }
       }
       result += value.slice(cursor, i) + REDACTED;
       cursor = end;

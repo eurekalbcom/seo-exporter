@@ -146,6 +146,13 @@ describe("redactUrl", () => {
     expect(redactUrl('{"token":true,"ok":1}')).toBe('{"token":[REDACTED],"ok":1}');
     expect(redactUrl('{"token":null}')).toBe('{"token":[REDACTED]}');
     expect(redactUrl('{\\"token\\":12345,"ok":1}')).toBe('{\\"token\\":[REDACTED],"ok":1}');
+    expect(redactUrl('{"token":[1,"S"]}')).toBe('{"token":[REDACTED]}');
+    expect(redactUrl('{"token":{"a":"x","b":"S"}}')).toBe('{"token":[REDACTED]}');
+    expect(redactUrl('{"token":{"a":"\\"}\S"}}')).toBe('{"token":[REDACTED]}');
+    expect(redactUrl('{"token":[1,"S"\nkeep]')).toBe('{"token":[REDACTED]\nkeep]');
+    expect(redactUrl('{"token":[1,"S"]}')).not.toContain("S");
+    expect(redactUrl('{"token":{"a":"x","b":"S"}}')).not.toContain("S");
+    expect(redactUrl('{"token":[1,"S"\nkeep]')).not.toContain("S");
 
     for (const secret of [
       "xyz-token-9f3a",
