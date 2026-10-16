@@ -150,10 +150,10 @@ describe("redactCause", () => {
 
   it("drops a BigInt cause", () => {
     const key = "secret/key 9f3a";
-    const redacted = redactError(new Error(`boom ${key}`, { cause: 10n }), key);
+    const redacted = redactError(new Error(`boom ${key}`, { cause: BigInt(10) }), key);
     expect(redacted.cause).toBeUndefined();
     expect(redacted.message).not.toContain(key);
-    const nested = redactError(new Error("boom", { cause: { note: key, n: 1n } }), key);
+    const nested = redactError(new Error("boom", { cause: { note: key, n: BigInt(1) } }), key);
     expect(nested.cause).toBeUndefined();
   });
 });
