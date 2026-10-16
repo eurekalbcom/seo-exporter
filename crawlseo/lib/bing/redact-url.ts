@@ -159,16 +159,13 @@ function redactBearer(value: string): string {
   return result + value.slice(cursor);
 }
 
-/** An unclosed `[` / `{` is not scanned past this many characters (4 KB). */
-const JSON_CONTAINER_CAP = 4096;
-
 /**
  * End of a `[` / `{` value. Quoted strings, including `\"`, do not change depth.
  * A newline inside the value is whitespace. An unclosed value stops at the end
- * of the input or after `JSON_CONTAINER_CAP` characters, whichever comes first.
+ * of the input.
  */
 function endOfJsonContainer(value: string, openAt: number): number {
-  const limit = Math.min(value.length, openAt + JSON_CONTAINER_CAP);
+  const limit = value.length;
   const stack: string[] = [];
   let quote = "";
   let escapedQuote = false;

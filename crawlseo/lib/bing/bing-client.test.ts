@@ -154,12 +154,14 @@ describe("redactUrl", () => {
     expect(redactUrl('{"token":[1,"S"]}')).not.toContain("S");
     expect(redactUrl('{"token":{"a":"x","b":"S"}}')).not.toContain("S");
     expect(redactUrl('{"token":[1,\n"S"]}\nkeep')).not.toContain("S");
-    const containerCap = 4096;
-    const cappedHead = '{"token":';
-    const cappedBody = "[" + "S" + "x".repeat(containerCap);
-    const capped = redactUrl(cappedHead + cappedBody + "TAIL");
-    expect(capped).toBe(cappedHead + "[REDACTED]" + cappedBody.slice(containerCap) + "TAIL");
-    expect(capped).not.toContain("S");
+    const pastCap = "x".repeat(5000);
+    expect(redactUrl('"token":[' + pastCap + "SECRET")).not.toContain("SECRET");
+    expect(redactUrl('"token":[' + pastCap + "SECRET]}")).not.toContain("SECRET");
+    expect(redactUrl('"token":[' + pastCap + "SECRET\nkeep")).not.toContain("SECRET");
+    const deep10k = '{"token":' + "[".repeat(10000) + '"SECRET"' + "]".repeat(10000) + "}";
+    const mixed10k = '{"token":' + "[{".repeat(5000) + '"SECRET"' + "}]".repeat(5000) + "}";
+    expect(redactUrl(deep10k)).not.toContain("SECRET");
+    expect(redactUrl(mixed10k)).not.toContain("SECRET");
     expect(redactUrl('{"token":[1,"S"')).toBe('{"token":[REDACTED]');
 
     for (const secret of [
