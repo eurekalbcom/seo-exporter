@@ -8,15 +8,21 @@ export class CrawlDomainDeniedError extends Error {
   }
 }
 
+/** IPv4 dotted quad, or an IPv6 hostname as returned by URL (bracketed). */
+function isIpHost(host: string): boolean {
+  if (host.startsWith("[") && host.endsWith("]") && host.includes(":")) return true;
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+}
+
 /**
- * Hostname only. A query, fragment, or userinfo that merely ends with an
- * allowlisted suffix must not pass. Parse failure is an empty host, which
- * the allowlist denies.
+ * Hostname only. A query, fragment, userinfo, or lookalike suffix must not
+ * pass. `host:port` is not a scheme. Parse failure is an empty host, which
+ * the allowlist denies. IDN labels are compared as punycode.
  */
 function normalizeHost(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
-  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const candidate = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
   let hostname: string;
   try {
     hostname = new URL(candidate).hostname;
@@ -26,6 +32,11 @@ function normalizeHost(value: string): string {
   hostname = hostname.toLowerCase().replace(/\.$/, "");
   hostname = hostname.replace(/^www\./, "");
   return hostname;
+}
+
+function hostMatches(host: string, entry: string): boolean {
+  if (isIpHost(host) || isIpHost(entry)) return host === entry;
+  return host === entry || host.endsWith(`.${entry}`);
 }
 
 /** Unset or empty denies every domain. There is no built-in allowlist. */
@@ -41,7 +52,7 @@ export function crawlAllowedDomains(): string[] {
 export function isCrawlDomainAllowed(domain: string, allowed = crawlAllowedDomains()): boolean {
   const host = normalizeHost(domain);
   if (!host) return false;
-  return allowed.some((entry) => host === entry || host.endsWith(`.${entry}`));
+  return allowed.some((entry) => hostMatches(host, entry));
 }
 
 export function assertCrawlDomainAllowed(domain: string): void {

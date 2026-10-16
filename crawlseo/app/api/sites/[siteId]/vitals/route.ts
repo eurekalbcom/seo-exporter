@@ -37,7 +37,7 @@ export async function POST(
   } catch (error) {
     console.error(error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Vitals sync failed" },
+      { error: "Vitals sync failed" },
       { status: 500 }
     );
   }

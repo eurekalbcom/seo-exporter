@@ -61,7 +61,7 @@ export async function POST(
   } catch (error) {
     console.error("Crawl error:", error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Crawl failed" },
+      { error: "Crawl failed" },
       { status: 500 }
     );
   }

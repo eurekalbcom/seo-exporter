@@ -24,7 +24,7 @@ export async function GET() {
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to list properties",
+        error: "Failed to list properties",
       },
       { status: 500 }
     );

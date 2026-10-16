@@ -54,7 +54,7 @@ export async function POST(req: Request) {
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to sync GSC data",
+        error: "Failed to sync GSC data",
       },
       { status: 500 }
     );

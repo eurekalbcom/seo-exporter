@@ -84,7 +84,7 @@ export async function POST(
 
     console.error(error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Failed" },
+      { error: "Failed" },
       { status: 500 }
     );
   }
