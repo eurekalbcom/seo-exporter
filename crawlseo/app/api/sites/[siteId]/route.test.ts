@@ -147,6 +147,23 @@ describe("PUT /api/sites/[siteId] domain", () => {
     expect(db.site.update).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
+
+  it.each([
+    "https://evil.com/?x=allowed.pl",
+    "https://evil.com#allowed.pl",
+    "https://allowed.pl.evil.com",
+    "https://allowed.pl@evil.com",
+  ])("rejects Bing URL %s whose hostname is not the allowlisted host", async (bingSite) => {
+    process.env.CRAWL_ALLOWED_DOMAINS = "allowed.pl";
+
+    const res = await put({ bingSite });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/CRAWL_ALLOWED_DOMAINS/);
+    expect(db.site.update).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(row.bingSite).toBe("https://old.example/");
+  });
 });
 
 describe("PUT /api/sites/[siteId] with a Bing property", () => {

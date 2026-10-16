@@ -13,6 +13,8 @@ describe("pre-deploy bind and vendored workflows", () => {
     expect(compose).not.toMatch(/["']3000:3000["']/);
     expect(compose).not.toContain("0.0.0.0:3000");
     expect(compose).not.toMatch(/AUTH_TRUST_HOST\s*[:=]\s*["']?true/);
+    expect(compose).not.toMatch(/CRAWL_ALLOWED_DOMAINS:\s*\$\{CRAWL_ALLOWED_DOMAINS:-[^}\s]+/);
+    expect(example).toMatch(/Unset or empty denies every domain/);
     expect(example).not.toMatch(/^AUTH_TRUST_HOST=true$/m);
     expect(auth).toContain('process.env.AUTH_TRUST_HOST?.trim().toLowerCase() === "true"');
   });

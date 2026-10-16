@@ -62,4 +62,27 @@ describe("POST /api/sites allowlist", () => {
     expect(res.status).toBe(400);
     expect(create).not.toHaveBeenCalled();
   });
+
+  it.each([
+    "https://evil.com/?x=allowed.pl",
+    "https://evil.com#allowed.pl",
+    "https://allowed.pl.evil.com",
+    "https://allowed.pl@evil.com",
+  ])("rejects bingSite %s before DNS or insert", async (bingSite) => {
+    process.env.CRAWL_ALLOWED_DOMAINS = "allowed.pl,eurekalb.com";
+
+    const res = await post({ gscProperty: "sc-domain:eurekalb.com", bingSite });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/CRAWL_ALLOWED_DOMAINS/);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("creates a site when bingSite is omitted", async () => {
+    const res = await post({ gscProperty: "sc-domain:eurekalb.com" });
+
+    expect(res.status).toBe(201);
+    expect(create).toHaveBeenCalled();
+  });
 });

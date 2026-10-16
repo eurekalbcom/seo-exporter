@@ -11,6 +11,7 @@ import { quickWinScore } from "../src/quick-wins";
 import { jobAt, SCHEDULE, TIME_ZONE } from "../src/schedule";
 
 const ROOT = join(import.meta.dirname, "..");
+const EUREKA_ALLOWLIST = { CRAWL_ALLOWED_DOMAINS: "bezkolejki.org,eurekalb.com" };
 
 describe("schedule", () => {
   it("runs gsc, crawl, vitals, and analysis on the Warsaw clock", () => {
@@ -63,45 +64,70 @@ describe("domains", () => {
       "bezkolejki.org",
       "eurekalb.com",
     ]);
-    const domains = loadScheduledDomains(join(ROOT, "config/domains.yml"), {});
+    const domains = loadScheduledDomains(join(ROOT, "config/domains.yml"), EUREKA_ALLOWLIST);
     expect(domains).toEqual(["bezkolejki.org", "eurekalb.com"]);
-    expect(() => assertCrawlDomainAllowed("example.com", {})).toThrow(CrawlDomainDeniedError);
+    expect(() => assertCrawlDomainAllowed("example.com", EUREKA_ALLOWLIST)).toThrow(CrawlDomainDeniedError);
+    expect(() => loadScheduledDomains(join(ROOT, "config/domains.yml"), {})).toThrow(CrawlDomainDeniedError);
+    expect(() => assertCrawlDomainAllowed("bezkolejki.org", {})).toThrow(CrawlDomainDeniedError);
+    expect(() =>
+      assertCrawlDomainAllowed("bezkolejki.org", { CRAWL_ALLOWED_DOMAINS: "" })
+    ).toThrow(CrawlDomainDeniedError);
+    expect(() =>
+      assertCrawlDomainAllowed("https://evil.com/?x=allowed.pl", { CRAWL_ALLOWED_DOMAINS: "allowed.pl" })
+    ).toThrow(CrawlDomainDeniedError);
   });
 });
 
 describe("adapter", () => {
   it("posts a read job only for an allowlisted domain", async () => {
+    const previous = process.env.CRAWL_ALLOWED_DOMAINS;
+    process.env.CRAWL_ALLOWED_DOMAINS = "bezkolejki.org,eurekalb.com";
     const calls: Array<{ url: string; method: string; body: string }> = [];
-    await triggerJob({
-      baseUrl: "http://crawlseo:3000",
-      token: "secret",
-      job: "crawl",
-      domain: "www.bezkolejki.org",
-      fetchImpl: (async (input, init) => {
-        calls.push({
-          url: String(input),
-          method: init?.method ?? "GET",
-          body: String(init?.body ?? ""),
-        });
-        return new Response("ok", { status: 202 });
-      }) as typeof fetch,
-    });
-    expect(calls).toEqual([
-      {
-        url: "http://crawlseo:3000/api/internal/jobs",
-        method: "POST",
-        body: JSON.stringify({ job: "crawl", domain: "www.bezkolejki.org" }),
-      },
-    ]);
-    await expect(
-      triggerJob({
+    try {
+      await triggerJob({
         baseUrl: "http://crawlseo:3000",
         token: "secret",
         job: "crawl",
-        domain: "example.com",
-        fetchImpl: fetch,
-      })
-    ).rejects.toBeInstanceOf(CrawlDomainDeniedError);
+        domain: "www.bezkolejki.org",
+        fetchImpl: (async (input, init) => {
+          calls.push({
+            url: String(input),
+            method: init?.method ?? "GET",
+            body: String(init?.body ?? ""),
+          });
+          return new Response("ok", { status: 202 });
+        }) as typeof fetch,
+      });
+      expect(calls).toEqual([
+        {
+          url: "http://crawlseo:3000/api/internal/jobs",
+          method: "POST",
+          body: JSON.stringify({ job: "crawl", domain: "www.bezkolejki.org" }),
+        },
+      ]);
+      await expect(
+        triggerJob({
+          baseUrl: "http://crawlseo:3000",
+          token: "secret",
+          job: "crawl",
+          domain: "example.com",
+          fetchImpl: fetch,
+        })
+      ).rejects.toBeInstanceOf(CrawlDomainDeniedError);
+      delete process.env.CRAWL_ALLOWED_DOMAINS;
+      await expect(
+        triggerJob({
+          baseUrl: "http://crawlseo:3000",
+          token: "secret",
+          job: "crawl",
+          domain: "www.bezkolejki.org",
+          fetchImpl: fetch,
+        })
+      ).rejects.toBeInstanceOf(CrawlDomainDeniedError);
+    } finally {
+      if (previous === undefined) delete process.env.CRAWL_ALLOWED_DOMAINS;
+      else process.env.CRAWL_ALLOWED_DOMAINS = previous;
+    }
   });
 
   it("records analysis as proposed and does not trigger a write", async () => {
@@ -110,7 +136,7 @@ describe("adapter", () => {
     const audits: Array<Record<string, unknown>> = [];
     const job = await tick(new Date("2026-01-15T05:00:00.000Z"), {
       domainsFile: join(ROOT, "config/domains.yml"),
-      env: {},
+      env: EUREKA_ALLOWLIST,
       trigger: async ({ job: name }) => {
         triggered.push(name);
       },
@@ -131,7 +157,7 @@ describe("adapter", () => {
 
     const morning = await tick(new Date("2026-01-15T02:00:00.000Z"), {
       domainsFile: join(ROOT, "config/domains.yml"),
-      env: {},
+      env: EUREKA_ALLOWLIST,
       trigger: async ({ job: name, domain }) => {
         triggered.push(`${name}:${domain}`);
       },

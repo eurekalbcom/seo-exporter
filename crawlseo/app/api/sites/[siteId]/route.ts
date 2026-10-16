@@ -149,14 +149,22 @@ export async function PUT(
       let protocol = "";
       try {
         protocol = new URL(nextBingSite).protocol;
-      } catch {}
+      } catch {
+        protocol = "";
+      }
       if (!/^https?:$/.test(protocol)) {
         return Response.json(
           { error: "bingSite must be an http(s) URL" },
           { status: 400 }
         );
       }
-      const denied = allowlisted(nextBingSite);
+      // Same hostname extraction as domain and gscProperty. The allowlist
+      // sees evil.com, not a query or fragment that ends in an allowed suffix.
+      const bingDomain = siteDomainFromProperty(nextBingSite);
+      if (!bingDomain) {
+        return Response.json({ error: "Invalid bingSite" }, { status: 400 });
+      }
+      const denied = allowlisted(bingDomain);
       if (denied) return denied;
     }
     const change = {

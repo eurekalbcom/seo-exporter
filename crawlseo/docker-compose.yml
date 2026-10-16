@@ -35,7 +35,8 @@ services:
       BING_ENABLED: ${BING_ENABLED:-false}
       AUTOCOMPLETE_ENABLED: ${AUTOCOMPLETE_ENABLED:-false}
       DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-true}
-      CRAWL_ALLOWED_DOMAINS: ${CRAWL_ALLOWED_DOMAINS:-bezkolejki.org,eurekalb.com}
+      # Unset or empty denies every domain. There is no built-in allowlist.
+      CRAWL_ALLOWED_DOMAINS: ${CRAWL_ALLOWED_DOMAINS:-}
 
   # Postgres has no published port and no route to the public internet.
   # The app reaches it as db:5432 on the internal network.

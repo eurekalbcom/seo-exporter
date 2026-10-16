@@ -1,5 +1,3 @@
-export const DEFAULT_CRAWL_ALLOWED_DOMAINS = ["bezkolejki.org", "eurekalb.com"] as const;
-
 export class CrawlDomainDeniedError extends Error {
   readonly domain: string;
 
@@ -10,21 +8,31 @@ export class CrawlDomainDeniedError extends Error {
   }
 }
 
+/**
+ * Hostname only. A query, fragment, or userinfo that merely ends with an
+ * allowlisted suffix must not pass. Parse failure is an empty host, which
+ * the allowlist denies.
+ */
 function normalizeHost(value: string): string {
-  let host = value.trim().toLowerCase();
-  host = host.replace(/^https?:\/\//, "");
-  host = host.split("/")[0] ?? "";
-  host = host.replace(/:\d+$/, "");
-  host = host.replace(/\.$/, "");
-  host = host.replace(/^www\./, "");
-  return host;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let hostname: string;
+  try {
+    hostname = new URL(candidate).hostname;
+  } catch {
+    return "";
+  }
+  hostname = hostname.toLowerCase().replace(/\.$/, "");
+  hostname = hostname.replace(/^www\./, "");
+  return hostname;
 }
 
-/** Unset uses the Eureka allowlist. An explicit empty value allows nothing. */
+/** Unset or empty denies every domain. There is no built-in allowlist. */
 export function crawlAllowedDomains(): string[] {
   const raw = process.env.CRAWL_ALLOWED_DOMAINS;
-  const source = raw === undefined ? DEFAULT_CRAWL_ALLOWED_DOMAINS.join(",") : raw;
-  return source
+  if (raw === undefined || raw.trim() === "") return [];
+  return raw
     .split(",")
     .map((domain) => normalizeHost(domain))
     .filter(Boolean);

@@ -11,7 +11,7 @@
 
 Google Search Console, a site crawler, Core Web Vitals and an MCP server in one self-hosted dashboard. Free forever.
 
-**SEO Autopilot fork (EUR-407).** This copy is pinned to upstream `49fd73d87a3cd86b59df8bbc41f78d10c9644596` (`NOTICE`, MIT `LICENSE`). DataForSEO is removed. `WRITE_MODE`, `BING_ENABLED`, and `AUTOCOMPLETE_ENABLED` default off. Registration is closed unless `DISABLE_REGISTRATION=false`, and `ALLOWED_EMAILS` is required. Crawls run only for `CRAWL_ALLOWED_DOMAINS` (default `bezkolejki.org,eurekalb.com`). No external write until CISO GO (EUR-406).
+**SEO Autopilot fork (EUR-407).** This copy is pinned to upstream `49fd73d87a3cd86b59df8bbc41f78d10c9644596` (`NOTICE`, MIT `LICENSE`). DataForSEO is removed. `WRITE_MODE`, `BING_ENABLED`, and `AUTOCOMPLETE_ENABLED` default off. Registration is closed unless `DISABLE_REGISTRATION=false`, and `ALLOWED_EMAILS` is required. Crawls run only for `CRAWL_ALLOWED_DOMAINS` (unset or empty denies every domain). No external write until CISO GO (EUR-406).
 
 [![GitHub stars](https://img.shields.io/github/stars/crawlseo/crawlseo?style=flat-square)](https://github.com/crawlseo/crawlseo/stargazers)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
