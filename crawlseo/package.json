@@ -1,0 +1,72 @@
+{
+  "name": "crawlseo",
+  "version": "0.2.3",
+  "private": true,
+  "description": "Open-source SEO monitoring. GSC + Crawler + Core Web Vitals + MCP in one dashboard.",
+  "homepage": "https://github.com/crawlseo/crawlseo",
+  "repository": "https://github.com/crawlseo/crawlseo",
+  "license": "MIT",
+  "author": "Brandson Digital",
+  "keywords": [
+    "seo",
+    "seo-tools",
+    "google-search-console",
+    "open-source",
+    "self-hosted",
+    "mcp",
+    "nextjs",
+    "site-crawler",
+    "core-web-vitals",
+    "seo-monitoring"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "mcp": "npx tsx mcp/server.ts",
+    "seed:demo": "npx tsx scripts/seed-demo.ts",
+    "seed:demo:clean": "npx tsx scripts/seed-demo.ts --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@auth/core": "^0.41.0",
+    "@auth/prisma-adapter": "^2.11.1",
+    "@base-ui/react": "^1.3.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@prisma/client": "^6.19.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.7.0",
+    "next": "16.4.2",
+    "next-auth": "^5.0.0-beta.30",
+    "prisma": "^6.19.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "robots-parser": "^3.0.1",
+    "tailwind-merge": "^3.5.0",
+    "tw-animate-css": "^1.4.0",
+    "undici": "^7.30.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
+    "@playwright/test": "^1.55.1",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^18.0.8",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.2"
+  }
+}

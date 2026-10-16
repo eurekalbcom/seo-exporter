@@ -1,0 +1,67 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: seo-autopilot-crawlseo:readonly
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+      - egress
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crawlseo}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-crawlseo}
+      WRITE_MODE: ${WRITE_MODE:-off}
+      BING_ENABLED: ${BING_ENABLED:-false}
+      AUTOCOMPLETE_ENABLED: ${AUTOCOMPLETE_ENABLED:-false}
+      DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-true}
+      CRAWL_ALLOWED_DOMAINS: ${CRAWL_ALLOWED_DOMAINS:-bezkolejki.org,eurekalb.com}
+
+  # Postgres has no published port and no route to the public internet.
+  # The app reaches it as db:5432 on the internal network.
+  db:
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    restart: always
+    networks:
+      - internal
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crawlseo}
+      POSTGRES_USER: ${POSTGRES_USER:-crawlseo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crawlseo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# MCP is stdio only: `npm run mcp` (mcp/server.ts uses StdioServerTransport).
+# Do not add a port, SSE transport, or HTTP MCP listener.
+
+networks:
+  internal:
+    internal: true
+  egress:
+
+volumes:
+  db_data:

@@ -1,0 +1,1552 @@
+import { createHash } from "crypto";
+import type { LookupAddress } from "dns";
+import { lookup } from "dns/promises";
+import { BlockList, isIPv4, isIPv6, type LookupFunction } from "net";
+import { Agent } from "undici";
+import { db } from "@/lib/db";
+import type { IssueSeverity, IssueType } from "@prisma/client";
+import { REMEDIATION } from "./remediation";
+import { countVisibleIssues } from "./issue-filter";
+import {
+  CrawlDelayStopError,
+  ROBOTS_MAX_BYTES,
+  RobotsBlockedError,
+  RobotsPolicy,
+  type RobotsFetch,
+  type RobotsReport,
+  type SkipReason,
+} from "./robots";
+
+const ABSOLUTE_MAX_PAGES = 2000;
+const BATCH_SIZE = 15;
+const BATCH_DELAY_MS = 100;
+const FETCH_TIMEOUT_MS = 12_000;
+// How often a running crawl records progress at most (lastProgressAt, pagesFound).
+// lib/crawler/lifecycle.ts treats a crawl that stops recording it as interrupted.
+const PROGRESS_EVERY_MS = 5_000;
+const MAX_REDIRECTS = 5;
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
+// A crawl stops after this many minutes (CRAWL_MAX_MINUTES overrides it).
+// Mostly reached on sites that set a Crawl-delay.
+const DEFAULT_CRAWL_MAX_MINUTES = 30;
+export const USER_AGENT = "SEOAutopilotBot/0.1 (+https://eurekalb.com/bot)";
+
+/* ------------------------------------------------------------------ */
+/*  Known managed-infrastructure path patterns                        */
+/*  URLs matching these are expected to return non-200 status codes    */
+/*  and should not be flagged as critical broken links.                */
+/* ------------------------------------------------------------------ */
+
+export type ManagedInfraPattern = {
+  /** Path prefix matched with startsWith (e.g. "/cdn-cgi/") */
+  pathPrefix: string;
+  /** Optional regex tested against the pathname — takes precedence over pathPrefix when set */
+  pathRegex?: RegExp;
+  /** Human-readable provider name shown in the issue message */
+  provider: string;
+};
+
+export const MANAGED_INFRA_PATTERNS: ManagedInfraPattern[] = [
+  { pathPrefix: "/cdn-cgi/", provider: "Cloudflare" },
+  // Add more CDN / managed-endpoint patterns here, e.g.:
+  // { pathPrefix: "/.well-known/", provider: "Well-Known" },
+  // { pathPrefix: "/_vercel/", provider: "Vercel" },
+  // { pathPrefix: "/_next/", pathRegex: /^\/_next\//, provider: "Next.js" },
+];
+
+export function matchManagedInfra(url: string): ManagedInfraPattern | null {
+  try {
+    const { pathname } = new URL(url);
+    for (const pattern of MANAGED_INFRA_PATTERNS) {
+      if (pattern.pathRegex) {
+        if (pattern.pathRegex.test(pathname)) return pattern;
+      } else {
+        if (pathname.startsWith(pattern.pathPrefix)) return pattern;
+      }
+    }
+  } catch {
+    // malformed URL — not a managed path
+  }
+  return null;
+}
+
+export type IssueInput = {
+  url: string;
+  type: IssueType;
+  severity: IssueSeverity;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
+type LinkInfo = {
+  sourceUrl: string;
+  targetUrl: string;
+  anchorText: string | null;
+  isInternal: boolean;
+  isNofollow: boolean;
+  statusCode: number | null;
+};
+
+export type PageSnapshot = {
+  url: string;
+  statusCode: number;
+  redirectUrl: string | null;
+  title: string | null;
+  description: string | null;
+  h1s: string[];
+  canonical: string | null;
+  robotsMeta: string | null;
+  wordCount: number;
+  contentScore: number;
+  internalOutlinks: string[];
+  externalOutlinks: string[];
+  links: LinkInfo[];
+  hasSchema: boolean;
+  hreflangTags: { lang: string; href: string }[];
+  imageCount: number;
+  imagesMissingAlt: number;
+  bytes: number;
+  loadMs: number;
+  contentHash: string;
+  indexable: boolean;
+};
+
+/* ------------------------------------------------------------------ */
+/*  URL helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+function normalizeUrl(raw: string, base: string): string | null {
+  try {
+    const u = new URL(raw, base);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    u.hash = "";
+    if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
+      u.pathname = u.pathname.slice(0, -1);
+    }
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function sameHost(a: string, b: string): boolean {
+  try {
+    return (
+      new URL(a).hostname.replace(/^www\./, "") ===
+      new URL(b).hostname.replace(/^www\./, "")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function originOf(url: string): string {
+  const u = new URL(url);
+  return `${u.protocol}//${u.host}`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  SSRF protection                                                   */
+/* ------------------------------------------------------------------ */
+
+// Private, loopback, link-local, shared and reserved ranges. BlockList
+// matches IPv6 subnets however the address is written ("::" vs "0:0:…:0",
+// "64:ff9b::7f00:1" vs "64:ff9b::127.0.0.1"), which prefix strings cannot.
+const PRIVATE_RANGES = new BlockList();
+for (const [net, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],    // shared address space (CGNAT)
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],     // IETF protocol assignments
+  ["192.0.2.0", 24],     // documentation (TEST-NET-1)
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],    // benchmarking
+  ["198.51.100.0", 24],  // documentation (TEST-NET-2)
+  ["203.0.113.0", 24],   // documentation (TEST-NET-3)
+  ["224.0.0.0", 4],      // multicast
+  ["240.0.0.0", 4],      // reserved, incl. 255.255.255.255
+] as const) {
+  PRIVATE_RANGES.addSubnet(net, prefix, "ipv4");
+}
+for (const [net, prefix] of [
+  ["::", 128],           // unspecified
+  ["::1", 128],          // loopback
+  ["::", 96],            // IPv4-compatible (deprecated), embeds an IPv4 address
+  ["::ffff:0:0:0", 96],  // IPv4-translated (SIIT), embeds an IPv4 address
+  ["64:ff9b::", 96],     // NAT64, embeds an IPv4 address
+  ["64:ff9b:1::", 48],   // local-use NAT64, embeds an IPv4 address
+  ["100::", 64],         // discard-only
+  ["2001::", 32],        // Teredo, embeds IPv4 addresses
+  ["2001:2::", 48],      // benchmarking
+  ["2001:db8::", 32],    // documentation
+  ["2002::", 16],        // 6to4, embeds an IPv4 address
+  ["3fff::", 20],        // documentation
+  ["fc00::", 7],         // unique local
+  ["fe80::", 10],        // link-local
+  ["fec0::", 10],        // site-local (deprecated)
+  ["ff00::", 8],         // multicast
+] as const) {
+  PRIVATE_RANGES.addSubnet(net, prefix, "ipv6");
+}
+
+export function isPrivateIp(ip: string): boolean {
+  // IPv4-mapped IPv6 (::ffff:x.x.x.x)
+  const v4mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (v4mapped) return isPrivateIp(v4mapped[1]);
+
+  if (isIPv4(ip)) return PRIVATE_RANGES.check(ip, "ipv4");
+  if (isIPv6(ip)) return PRIVATE_RANGES.check(ip, "ipv6");
+  // Not an IP at all: refuse rather than guess.
+  return true;
+}
+
+class BlockedAddressError extends Error {
+  constructor(readonly hostname: string) {
+    super(`Blocked: ${hostname} resolves to private/reserved IP`);
+  }
+}
+
+/** Every address of a name, or a Blocked error if any of them is private or reserved. */
+async function publicAddresses(hostname: string): Promise<LookupAddress[]> {
+  const addresses = await lookup(hostname, { all: true });
+  if (addresses.length === 0 || addresses.some((a) => isPrivateIp(a.address))) {
+    throw new BlockedAddressError(hostname);
+  }
+  return addresses;
+}
+
+/**
+ * Pre-flight check with a clear error message. It applies the same rule as
+ * pinnedLookup, so a name it accepts is not refused at connect time unless
+ * its answer changed. It cannot stop DNS rebinding on its own (the connection
+ * resolves the name again); pinnedLookup can.
+ */
+async function assertPublicUrl(url: string): Promise<void> {
+  await publicAddresses(new URL(url).hostname);
+}
+
+/**
+ * The `lookup` of every crawler connection. It resolves the name once, with
+ * all its addresses, refuses the connection if any of them is private or
+ * reserved, and hands the socket only the addresses it checked. The check and
+ * the connection share one resolution, so a short-TTL record that answers a
+ * public IP to the pre-flight check and a private one afterwards (DNS
+ * rebinding) cannot reach an internal address. IP literals never get here:
+ * they cannot rebind, and assertPublicUrl has already refused private ones.
+ */
+export const pinnedLookup: LookupFunction = (hostname, options, callback) => {
+  const family =
+    options.family === 4 || options.family === "IPv4" ? 4
+    : options.family === 6 || options.family === "IPv6" ? 6
+    : 0;
+  publicAddresses(hostname)
+    .then((addresses) => {
+      const usable = family ? addresses.filter((a) => a.family === family) : addresses;
+      if (usable.length === 0) {
+        throw Object.assign(new Error(`No IPv${family} address for ${hostname}`), { code: "ENOTFOUND" });
+      }
+      return usable;
+    })
+    .then(
+      (usable) => {
+        if (options.all) callback(null, usable);
+        else callback(null, usable[0].address, usable[0].family);
+      },
+      (err: NodeJS.ErrnoException) => callback(err, "")
+    );
+};
+
+/** Dispatcher of every crawler request: pages, redirect hops, robots.txt, sitemaps. */
+export const crawlerDispatcher = new Agent({ connect: { lookup: pinnedLookup } });
+
+/**
+ * Validates that a domain string resolves to a public IP.
+ * Used at site-creation time to reject private/reserved targets.
+ */
+export async function assertPublicDomain(domain: string): Promise<void> {
+  const url = domain.startsWith("http") ? domain : `https://${domain}`;
+  await assertPublicUrl(url);
+}
+
+/* ------------------------------------------------------------------ */
+/*  HTML parsing helpers                                              */
+/* ------------------------------------------------------------------ */
+
+function extractTag(html: string, re: RegExp): string | null {
+  const m = html.match(re);
+  return m?.[1]?.trim() || null;
+}
+
+/*
+ * HTML5 allows three attribute value syntaxes: "double quoted", 'single
+ * quoted', and unquoted. Minifiers drop the quotes whenever the value has no
+ * spaces, so a real page can serve `<meta content="Some text" name=description>`
+ * — `content` keeps its quotes because the value has spaces, `name` loses them.
+ * A pattern that only knows the quoted form reports that tag as missing.
+ *
+ * One attribute: a name, optionally followed by a value in any of the three
+ * syntaxes HTML5 allows — "double quoted", 'single quoted', or unquoted. An
+ * unquoted value ends only at whitespace or `>`, so query strings survive
+ * (`href=/search?q=shoes&page=2`).
+ */
+const ATTR_RE = /([^\s"'>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/g;
+
+/** Strips the surrounding quotes from a raw attribute value, if any. */
+function unquote(raw: string): string {
+  const q = raw[0];
+  return (q === '"' || q === "'") && raw.length > 1 && raw.endsWith(q)
+    ? raw.slice(1, -1)
+    : raw;
+}
+
+/**
+ * Attributes of one tag, lower-cased names, first occurrence winning (browsers
+ * ignore later duplicates).
+ *
+ * Parsed positionally in a single pass rather than searched for by name: a
+ * name search matches text inside ANOTHER attribute's value, so
+ * `<a onclick="go('href=/tracker')" href="/real">` would yield `/tracker`.
+ * Accepts a whole tag or a bare attribute list.
+ */
+function parseAttrs(tag: string): Map<string, string> {
+  const body = tag.replace(/^<[^\s/>]*/, "").replace(/\/?>$/, "");
+  const out = new Map<string, string>();
+  for (const m of body.matchAll(ATTR_RE)) {
+    const name = m[1].toLowerCase();
+    if (!out.has(name)) out.set(name, m[2] === undefined ? "" : unquote(m[2]));
+  }
+  return out;
+}
+
+/**
+ * Every `<tag …>` in the document. The alternation lets a quoted value contain
+ * `>`, which is legal (`<meta content="Before > After" …>`); a plain `[^>]*`
+ * envelope would cut the tag in half there and lose the later attributes.
+ */
+function tagsNamed(html: string, tag: string): string[] {
+  return html.match(new RegExp(`<${tag}\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, "gi")) ?? [];
+}
+
+/**
+ * Value of `attrName` on the first `<tag>` whose `name` attribute is `value`.
+ * Keeps scanning when a matching tag has no `attrName`, so an empty
+ * `<meta name=robots>` does not mask the real one that follows.
+ */
+function tagAttr(
+  html: string,
+  tag: string,
+  name: string,
+  value: string,
+  attrName: string
+): string | null {
+  for (const t of tagsNamed(html, tag)) {
+    const attrs = parseAttrs(t);
+    if (attrs.get(name)?.toLowerCase() !== value) continue;
+    const found = attrs.get(attrName);
+    if (found) return found;
+  }
+  return null;
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function stripTags(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Parse a fetched HTML page into a snapshot                         */
+/* ------------------------------------------------------------------ */
+
+export function parseHtml(
+  url: string,
+  html: string,
+  statusCode: number,
+  loadMs: number,
+  bytes: number,
+  redirectUrl: string | null,
+  seedUrl: string
+): PageSnapshot {
+  const titleRaw = extractTag(html, /<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleRaw
+    ? decodeEntities(titleRaw.replace(/\s+/g, " ").trim())
+    : null;
+
+  const description = tagAttr(html, "meta", "name", "description", "content");
+
+  const h1s = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)].map((m) =>
+    decodeEntities(stripTags(m[1])).slice(0, 200)
+  );
+
+  const canonical = tagAttr(html, "link", "rel", "canonical", "href");
+
+  // robots meta
+  const robotsMeta = tagAttr(html, "meta", "name", "robots", "content");
+
+  const hasSchema =
+    /application\/ld\+json/i.test(html) ||
+    /\bitemscope\b/i.test(html) ||
+    /\bitemtype\b/i.test(html);
+
+  // hreflang tags
+  const hreflangTags = tagsNamed(html, "link")
+    .map((tag) => parseAttrs(tag))
+    .filter((a) => a.get("rel")?.toLowerCase() === "alternate")
+    .map((a) => ({ lang: a.get("hreflang") ?? "", href: a.get("href") ?? "" }))
+    .filter((t) => t.lang !== "" && t.href !== "");
+
+  // Images
+  const imgTags = tagsNamed(html, "img");
+  const imageCount = imgTags.length;
+  // Only a genuinely absent alt attribute counts as missing. `alt=""` is the
+  // spec-mandated markup for a decorative image — it tells assistive tech to
+  // skip the image — so flagging it inverts the accessibility advice the issue
+  // is meant to give. A whitespace-only alt still counts as present: values are
+  // not trimmed.
+  const imagesMissingAlt = imgTags.filter(
+    (tag) => !parseAttrs(tag).has("alt")
+  ).length;
+
+  // Body text and word count
+  const bodyText = stripTags(html);
+  const words = bodyText ? bodyText.split(/\s+/).filter(Boolean) : [];
+  const wordCount = words.length;
+
+  // Content hash
+  const contentHash = hashText(bodyText);
+
+  // Links - extract anchor text, nofollow, internal/external
+  const internalOutlinks: string[] = [];
+  const externalOutlinks: string[] = [];
+  const links: LinkInfo[] = [];
+
+  const anchorMatches = [
+    ...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi),
+  ];
+  for (const m of anchorMatches) {
+    const attrs = m[1];
+    const anchorContent = m[2];
+    const tagAttrs = parseAttrs(attrs);
+    const href = tagAttrs.get("href");
+    if (!href || href.startsWith("#")) continue;
+
+    const abs = normalizeUrl(href, url);
+    if (!abs) continue;
+
+    const anchorText = decodeEntities(stripTags(anchorContent)).slice(0, 200) || null;
+    const isNofollow = /\bnofollow\b/i.test(tagAttrs.get("rel") ?? "");
+    const isInternal = sameHost(abs, seedUrl);
+
+    links.push({
+      sourceUrl: url,
+      targetUrl: abs,
+      anchorText,
+      isInternal,
+      isNofollow,
+      statusCode: null, // filled in later for internal links
+    });
+
+    if (isInternal) {
+      internalOutlinks.push(abs);
+    } else {
+      externalOutlinks.push(abs);
+    }
+  }
+
+  // Indexable: not blocked by robots meta
+  const indexable = !(
+    robotsMeta &&
+    (/noindex/i.test(robotsMeta))
+  );
+
+  // Simple on-page content score 0-100
+  let contentScore = 40;
+  if (title && title.length >= 15 && title.length <= 65) contentScore += 15;
+  else if (title) contentScore += 5;
+  if (description && description.length >= 50 && description.length <= 160)
+    contentScore += 15;
+  else if (description) contentScore += 5;
+  if (h1s.length === 1) contentScore += 15;
+  else if (h1s.length > 1) contentScore += 5;
+  if (wordCount >= 300) contentScore += 15;
+  else if (wordCount >= 100) contentScore += 8;
+  if (hasSchema) contentScore += 5;
+  if (canonical) contentScore += 5;
+  contentScore = Math.max(0, Math.min(100, contentScore));
+
+  return {
+    url,
+    statusCode,
+    redirectUrl,
+    title,
+    description,
+    h1s,
+    canonical: canonical ? normalizeUrl(canonical, url) : null,
+    robotsMeta,
+    wordCount,
+    contentScore,
+    internalOutlinks: [...new Set(internalOutlinks)],
+    externalOutlinks: [...new Set(externalOutlinks)],
+    links,
+    hasSchema,
+    hreflangTags,
+    imageCount,
+    imagesMissingAlt,
+    bytes,
+    loadMs,
+    contentHash,
+    indexable,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Fetch helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+async function readBodyCapped(
+  res: Response,
+  limit = MAX_RESPONSE_BYTES,
+  truncate = false
+): Promise<ArrayBuffer> {
+  if (!res.body) return new ArrayBuffer(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (total + value.byteLength > limit) {
+      await reader.cancel();
+      if (!truncate) throw new Error(`Response exceeded ${limit} bytes`);
+      chunks.push(value.subarray(0, limit - total));
+      total = limit;
+      break;
+    }
+    total += value.byteLength;
+    chunks.push(value);
+  }
+  const buf = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buf.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return buf.buffer;
+}
+
+class FetchTimeoutError extends Error {
+  constructor(url: string) {
+    super(`Timed out after ${FETCH_TIMEOUT_MS / 1000} s: ${url}`);
+  }
+}
+
+class TooManyRedirectsError extends Error {
+  constructor() {
+    super(`Too many redirects (>${MAX_REDIRECTS})`);
+  }
+}
+
+/** Runs around every request of fetchPublic, redirect hops included. */
+type HopHooks = {
+  /** Throws to stop before the request, e.g. when robots.txt disallows it. */
+  guard?: (url: string) => Promise<void>;
+  /** Waits until the origin accepts a request; returns the function that marks it done. */
+  pace?: (url: string) => Promise<() => void>;
+  /** Aborts the request in flight; no later hop, guard or pace starts once it is aborted. */
+  signal?: AbortSignal;
+};
+
+type PublicResponse = {
+  res: Response;
+  finalUrl: string;
+  /** Time spent on requests so far, without Crawl-delay waits. */
+  activeMs: () => number;
+  /** True once the request timed out, also while the body is read. */
+  timedOut: () => boolean;
+  /** Call once the body is read: clears the timeout and frees the origin. */
+  done: () => void;
+};
+
+/**
+ * fetch() that follows redirects itself, up to MAX_REDIRECTS, so every hop,
+ * not just the first URL, is checked against private/reserved IPs and against
+ * the hooks. Each request has its own FETCH_TIMEOUT_MS, started after any
+ * Crawl-delay wait. Once `hooks.signal` aborts, it throws the signal's reason.
+ */
+async function fetchPublic(
+  url: string,
+  headers: Record<string, string>,
+  hooks: HopHooks = {}
+): Promise<PublicResponse> {
+  let currentUrl = url;
+  let priorMs = 0;
+  const outer = hooks.signal;
+
+  for (let redirects = 0; ; redirects++) {
+    outer?.throwIfAborted();
+    // A URL that is not http(s), or whose host does not resolve or is
+    // private, fails here as a fetch error (a broken link), before robots.txt
+    // is consulted: there is no robots.txt to read for it.
+    if (!isHttpUrl(currentUrl)) throw new Error(`Unsupported URL: ${currentUrl}`);
+    await assertPublicUrl(currentUrl);
+    await hooks.guard?.(currentUrl);
+    outer?.throwIfAborted();
+    const release = (await hooks.pace?.(currentUrl)) ?? (() => {});
+    if (outer?.aborted) {
+      release();
+      outer.throwIfAborted();
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const started = Date.now();
+    const done = () => {
+      clearTimeout(timer);
+      release();
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(currentUrl, {
+        headers,
+        signal: outer ? AbortSignal.any([controller.signal, outer]) : controller.signal,
+        redirect: "manual",
+        dispatcher: crawlerDispatcher,
+      } as RequestInit);
+    } catch (err) {
+      done();
+      if (controller.signal.aborted) throw new FetchTimeoutError(currentUrl);
+      // Refused at connect time: report it as clearly as the pre-flight check.
+      if (err instanceof Error && err.cause instanceof BlockedAddressError) throw err.cause;
+      throw err;
+    }
+
+    const location =
+      res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    if (!location) {
+      const base = priorMs;
+      return {
+        res,
+        finalUrl: currentUrl,
+        activeMs: () => base + Date.now() - started,
+        timedOut: () => controller.signal.aborted,
+        done,
+      };
+    }
+
+    priorMs += Date.now() - started;
+    await res.body?.cancel().catch(() => {});
+    done();
+    // `redirects` have been followed; this one would make redirects + 1.
+    if (redirects === MAX_REDIRECTS) throw new TooManyRedirectsError();
+    currentUrl = new URL(location, currentUrl).toString();
+  }
+}
+
+async function fetchPage(url: string, hooks: HopHooks): Promise<{
+  statusCode: number;
+  html: string;
+  finalUrl: string;
+  loadMs: number;
+  bytes: number;
+  contentType: string;
+}> {
+  const r = await fetchPublic(
+    url,
+    { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" },
+    hooks
+  );
+  try {
+    const buf = await readBodyCapped(r.res);
+    const bytes = buf.byteLength;
+    const contentType = r.res.headers.get("content-type") || "";
+    const html =
+      contentType.includes("html") || contentType.includes("xml")
+        ? new TextDecoder("utf-8", { fatal: false }).decode(buf)
+        : "";
+    return {
+      statusCode: r.res.status,
+      html,
+      finalUrl: r.finalUrl,
+      loadMs: r.activeMs(),
+      bytes,
+      contentType,
+    };
+  } catch (err) {
+    throw r.timedOut() ? new FetchTimeoutError(r.finalUrl) : err;
+  } finally {
+    r.done();
+  }
+}
+
+/** Text body, null on a non-2xx answer. Throws on a failed or blocked hop. */
+async function readText(url: string, hooks: HopHooks): Promise<string | null> {
+  const r = await fetchPublic(url, { "User-Agent": USER_AGENT }, hooks);
+  try {
+    if (!r.res.ok) return null;
+    return await r.res.text();
+  } finally {
+    r.done();
+  }
+}
+
+/** Sitemap (or any text) body, or null on any failure or blocked hop. */
+export async function fetchText(url: string, hooks: HopHooks = {}): Promise<string | null> {
+  try {
+    return await readText(url, hooks);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One origin's robots.txt: up to MAX_REDIRECTS redirects, at most
+ * ROBOTS_MAX_BYTES parsed. robots.txt itself is never subject to robots.txt.
+ */
+async function fetchRobotsTxt(origin: string, signal?: AbortSignal): Promise<RobotsFetch> {
+  const url = `${origin}/robots.txt`;
+  try {
+    await assertPublicUrl(url);
+  } catch (err) {
+    // No host to ask: not a robots.txt answer. The URLs fail as broken links.
+    return { kind: "no-host", error: err instanceof Error ? err.message : String(err) };
+  }
+  let r: PublicResponse;
+  try {
+    r = await fetchPublic(url, { "User-Agent": USER_AGENT }, { signal });
+  } catch (err) {
+    // Its own host refused at connect time (a record the pre-flight check did
+    // not see): the same answer as a failed pre-flight check.
+    if (err instanceof BlockedAddressError && err.hostname === new URL(url).hostname) {
+      return { kind: "no-host", error: err.message };
+    }
+    if (err instanceof TooManyRedirectsError) return { kind: "too-many-redirects" };
+    if (err instanceof FetchTimeoutError) return { kind: "error", reason: "timeout" };
+    return { kind: "error", reason: "network error" };
+  }
+  try {
+    if (!r.res.ok) {
+      await r.res.body?.cancel().catch(() => {});
+      return { kind: "response", status: r.res.status, text: "" };
+    }
+    const buf = await readBodyCapped(r.res, ROBOTS_MAX_BYTES, true);
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+    return { kind: "response", status: r.res.status, text };
+  } catch {
+    return { kind: "error", reason: r.timedOut() ? "timeout" : "network error" };
+  } finally {
+    r.done();
+  }
+}
+
+function parseSitemapUrls(xml: string, base: string): string[] {
+  const locs = [...xml.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)].map((m) =>
+    m[1].trim()
+  );
+  const out: string[] = [];
+  for (const loc of locs) {
+    const n = normalizeUrl(loc, base);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Issue detection per page                                          */
+/* ------------------------------------------------------------------ */
+
+export function issuesFromPage(page: PageSnapshot, _seedOrigin: string): IssueInput[] {
+  const issues: IssueInput[] = [];
+  const { url } = page;
+
+  const rem = (type: string) => {
+    const r = REMEDIATION[type];
+    return r ? { howToFix: r.howToFix } : {};
+  };
+
+  if (page.statusCode >= 400) {
+    const infra = matchManagedInfra(url);
+    if (infra) {
+      issues.push({
+        url,
+        type: "BROKEN_LINK",
+        severity: "INFO",
+        message: `Managed infra endpoint (${infra.provider}), expected, not a broken link`,
+        details: {
+          statusCode: page.statusCode,
+          provider: infra.provider,
+          ...rem("MANAGED_INFRA"),
+        },
+      });
+    } else {
+      issues.push({
+        url,
+        type: "BROKEN_LINK",
+        severity: "CRITICAL",
+        message: `HTTP ${page.statusCode}`,
+        details: { statusCode: page.statusCode, ...rem("BROKEN_LINK") },
+      });
+    }
+    return issues;
+  }
+
+  if (!page.title) {
+    issues.push({
+      url,
+      type: "MISSING_TITLE",
+      severity: "CRITICAL",
+      message: "Missing <title> tag",
+      details: rem("MISSING_TITLE"),
+    });
+  }
+
+  if (!page.description) {
+    issues.push({
+      url,
+      type: "MISSING_DESCRIPTION",
+      severity: "WARNING",
+      message: "Missing meta description",
+      details: rem("MISSING_DESCRIPTION"),
+    });
+  }
+
+  if (page.h1s.length === 0) {
+    issues.push({
+      url,
+      type: "MISSING_H1",
+      severity: "WARNING",
+      message: "No H1 heading found",
+      details: rem("MISSING_H1"),
+    });
+  } else if (page.h1s.length > 1) {
+    issues.push({
+      url,
+      type: "MULTIPLE_H1",
+      severity: "INFO",
+      message: `${page.h1s.length} H1 headings found`,
+      details: { h1s: page.h1s, ...rem("MULTIPLE_H1") },
+    });
+  }
+
+  if (page.imagesMissingAlt > 0) {
+    issues.push({
+      url,
+      type: "MISSING_ALT",
+      severity: "WARNING",
+      message: `${page.imagesMissingAlt}/${page.imageCount} images missing alt`,
+      details: {
+        missing: page.imagesMissingAlt,
+        total: page.imageCount,
+        ...rem("MISSING_ALT"),
+      },
+    });
+  }
+
+  if (!page.canonical) {
+    issues.push({
+      url,
+      type: "MISSING_CANONICAL",
+      severity: "INFO",
+      message: "No canonical tag",
+      details: rem("MISSING_CANONICAL"),
+    });
+  }
+
+  if (!page.hasSchema) {
+    issues.push({
+      url,
+      type: "MISSING_SCHEMA",
+      severity: "INFO",
+      message: "No structured data (JSON-LD / microdata)",
+      details: rem("MISSING_SCHEMA"),
+    });
+  }
+
+  if (page.loadMs > 3000) {
+    issues.push({
+      url,
+      type: "SLOW_PAGE",
+      severity: "WARNING",
+      message: `Slow response: ${page.loadMs}ms`,
+      details: { loadMs: page.loadMs, ...rem("SLOW_PAGE") },
+    });
+  }
+
+  if (page.bytes > 3 * 1024 * 1024) {
+    issues.push({
+      url,
+      type: "LARGE_PAGE",
+      severity: "WARNING",
+      message: `Large HTML payload: ${(page.bytes / 1024 / 1024).toFixed(1)}MB`,
+      details: { bytes: page.bytes, ...rem("LARGE_PAGE") },
+    });
+  }
+
+  return issues;
+}
+
+export function computeHealthScore(issues: IssueInput[], pagesFound: number): number {
+  if (pagesFound === 0) return 0;
+  let score = 100;
+  for (const issue of issues) {
+    if (issue.severity === "CRITICAL") score -= 8;
+    else if (issue.severity === "WARNING") score -= 3;
+    else score -= 1;
+  }
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main crawl result type                                            */
+/* ------------------------------------------------------------------ */
+
+export type CrawlResult = {
+  crawlId: string;
+  pagesFound: number;
+  issuesFound: number;
+  healthScore: number;
+  sitemapUrls: number;
+  missingFromSitemap: number;
+  orphanCandidates: number;
+  avgContentScore: number;
+  robots: RobotsReport;
+};
+
+/** CRAWL_MAX_MINUTES, or DEFAULT_CRAWL_MAX_MINUTES when unset or invalid. */
+function crawlMaxMinutes(): number {
+  const n = Number(process.env.CRAWL_MAX_MINUTES);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_CRAWL_MAX_MINUTES;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main crawl function                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Crawl a site starting from domain root (+ sitemap).
+ * Supports up to 2000 pages with concurrent batch fetching.
+ */
+export async function runSiteCrawl(
+  siteId: string,
+  domain: string,
+  maxPages: number = 200,
+  existingCrawlId?: string
+): Promise<CrawlResult> {
+  const effectiveMax = Math.max(1, Math.min(maxPages, ABSOLUTE_MAX_PAGES));
+  const seed = domain.startsWith("http") ? domain : `https://${domain}`;
+  const seedUrl = normalizeUrl(seed, seed) || seed;
+  const origin = originOf(seedUrl);
+
+  const now = new Date();
+  const crawl = existingCrawlId
+    ? await db.crawl.update({
+        where: { id: existingCrawlId },
+        data: { status: "RUNNING", startedAt: now, lastProgressAt: now },
+      })
+    : await db.crawl.create({
+        data: {
+          siteId,
+          status: "RUNNING",
+          startedAt: now,
+          lastProgressAt: now,
+        },
+      });
+
+  try {
+    return await executeCrawl(crawl.id, siteId, seedUrl, origin, effectiveMax);
+  } catch (err) {
+    // Mark crawl as failed on any unhandled error
+    await db.crawl
+      .update({
+        where: { id: crawl.id },
+        data: {
+          status: "FAILED",
+          finishedAt: new Date(),
+          error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+        },
+      })
+      .catch(() => {}); // swallow DB errors during cleanup
+    throw err;
+  }
+}
+
+/**
+ * Records that the crawl is alive, at most every PROGRESS_EVERY_MS. A failed
+ * write does not stop the crawl; the next one catches up.
+ */
+function progressRecorder(crawlId: string) {
+  let last = Date.now(); // runSiteCrawl just set lastProgressAt
+  return async (pagesFound: number) => {
+    const now = Date.now();
+    if (now - last < PROGRESS_EVERY_MS) return;
+    last = now;
+    await db.crawl
+      .update({
+        where: { id: crawlId },
+        data: { lastProgressAt: new Date(now), pagesFound },
+      })
+      .catch(() => {});
+  };
+}
+
+async function executeCrawl(
+  crawlId: string,
+  _siteId: string,
+  seedUrl: string,
+  origin: string,
+  maxPages: number
+): Promise<CrawlResult> {
+  const recordProgress = progressRecorder(crawlId);
+  const issues: IssueInput[] = [];
+  const pages: PageSnapshot[] = [];
+  const allLinks: LinkInfo[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = [seedUrl];
+
+  /* ---- robots.txt, per origin ---- */
+  const limitMinutes = crawlMaxMinutes();
+  const deadline = Date.now() + limitMinutes * 60_000;
+  const robots = new RobotsPolicy({
+    fetchRobots: fetchRobotsTxt,
+    userAgent: USER_AGENT,
+    deadline,
+    limitMinutes,
+    heartbeat: () => recordProgress(pages.length),
+  });
+  const hooks: HopHooks = {
+    guard: (url) => robots.guard(url),
+    pace: (url) => robots.pace(url),
+  };
+  /** True when robots.txt lets the crawler fetch `url`; counts it otherwise. */
+  const allowed = async (url: string) => {
+    const verdict = await robots.check(url);
+    // "no-host": fetched anyway, so the failed lookup is reported as a broken link.
+    if (verdict === "allowed" || verdict === "no-host") return true;
+    await robots.skip(url, verdict);
+    return false;
+  };
+
+  const robotsUrl = `${origin}/robots.txt`;
+  const seedRobots = await robots.originFor(seedUrl);
+  if (
+    !seedRobots.hostError &&
+    (seedRobots.outcome === "missing" || seedRobots.outcome === "unreachable")
+  ) {
+    issues.push({
+      url: robotsUrl,
+      type: "MISSING_ROBOTS",
+      severity: "WARNING",
+      message:
+        seedRobots.message ??
+        `robots.txt not found${seedRobots.robotsStatus ? ` (${seedRobots.robotsStatus})` : ""}`,
+      details: REMEDIATION.MISSING_ROBOTS
+        ? { howToFix: REMEDIATION.MISSING_ROBOTS.howToFix }
+        : {},
+    });
+  }
+
+  /* ---- Sitemap discovery ---- */
+  let sitemapUrls: string[] = [];
+  // Sitemap: lines are free text; a malformed one is ignored, not fatal. One
+  // that names a default location is checked (and counted) once.
+  const sitemapCandidates = [
+    ...seedRobots.sitemaps.filter(isHttpUrl),
+    `${origin}/sitemap.xml`,
+    `${origin}/sitemap_index.xml`,
+  ];
+  /** Sitemaps already handled, by normalized URL: each is checked and counted once. */
+  const sitemapsSeen = new Set<string>();
+  /** The first sitemap robots.txt kept the crawler from, for the report. */
+  let sitemapSkip = null as { url: string; verdict: SkipReason } | null;
+  /**
+   * A sitemap's body, or null. A sitemap robots.txt keeps the crawler from,
+   * directly or at a redirect hop, is counted like any other skipped URL. A
+   * URL seen before (a Sitemap: line naming a default location, an index
+   * listing another candidate) is not requested or counted again; it is
+   * fetched as written.
+   */
+  const sitemapText = async (url: string): Promise<string | null> => {
+    const key = normalizeUrl(url, origin) ?? url;
+    if (sitemapsSeen.has(key)) return null;
+    sitemapsSeen.add(key);
+    if (!(await allowed(url))) {
+      sitemapSkip ??= { url, verdict: (await robots.check(url)) as SkipReason };
+      return null;
+    }
+    try {
+      return await readText(url, hooks);
+    } catch (error) {
+      if (error instanceof RobotsBlockedError || error instanceof CrawlDelayStopError) {
+        const verdict = error instanceof RobotsBlockedError ? error.verdict : "host-skipped";
+        await robots.skip(url, verdict, error.url !== url ? error.url : undefined);
+        sitemapSkip ??= { url, verdict };
+      }
+      return null;
+    } finally {
+      await recordProgress(0);
+    }
+  };
+
+  for (const smUrl of sitemapCandidates) {
+    const xml = await sitemapText(smUrl);
+    if (!xml) continue;
+    if (xml.includes("<sitemapindex")) {
+      const childSitemaps = parseSitemapUrls(xml, origin).slice(0, 5);
+      for (const child of childSitemaps) {
+        const childXml = await sitemapText(child);
+        if (childXml) sitemapUrls.push(...parseSitemapUrls(childXml, origin));
+      }
+    } else {
+      sitemapUrls.push(...parseSitemapUrls(xml, origin));
+    }
+    if (sitemapUrls.length) break;
+  }
+
+  sitemapUrls = [...new Set(sitemapUrls.filter((u) => sameHost(u, seedUrl)))];
+  if (sitemapUrls.length === 0) {
+    issues.push({
+      url: sitemapSkip?.url ?? `${origin}/sitemap.xml`,
+      type: "MISSING_SITEMAP",
+      severity: "WARNING",
+      message:
+        sitemapSkip?.verdict === "disallowed"
+          ? "Sitemap blocked by robots.txt"
+          : sitemapSkip
+            ? "Sitemap not fetched, robots.txt skipped its host"
+            : "No sitemap.xml found",
+      details: { howToFix: (sitemapSkip ? REMEDIATION.SITEMAP_BLOCKED : REMEDIATION.MISSING_SITEMAP)?.howToFix },
+    });
+  } else {
+    // Seed queue from sitemap
+    for (const u of sitemapUrls.slice(0, 100)) {
+      if (!queue.includes(u)) queue.push(u);
+    }
+  }
+
+  /* ---- Crawl loop with batch concurrency ---- */
+  while (queue.length > 0 && pages.length < maxPages) {
+    if (Date.now() >= deadline) {
+      const remaining = new Set<string>();
+      for (const u of queue) {
+        const n = normalizeUrl(u, origin);
+        if (n && !visited.has(n) && sameHost(n, seedUrl)) remaining.add(n);
+      }
+      await robots.timeLimitReached([...remaining]);
+      break;
+    }
+
+    // Collect the next batch of unvisited URLs
+    const batch: string[] = [];
+    while (batch.length < BATCH_SIZE && queue.length > 0 && pages.length + batch.length < maxPages) {
+      const next = queue.shift()!;
+      const normalized = normalizeUrl(next, origin);
+      if (!normalized || visited.has(normalized)) continue;
+      if (!sameHost(normalized, seedUrl)) continue;
+
+      // Checked against the robots.txt of the URL's own origin: the bare
+      // domain and www each have their own.
+      visited.add(normalized);
+      if (!(await allowed(normalized))) continue;
+      batch.push(normalized);
+    }
+
+    if (batch.length === 0) break;
+
+    // Fetch all pages in the batch concurrently
+    const results = await Promise.allSettled(
+      batch.map(async (url) => {
+        try {
+          const res = await fetchPage(url, hooks);
+          return { url, res, error: null };
+        } catch (err) {
+          return { url, res: null, error: err };
+        }
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "rejected") continue;
+      const { url, res, error } = result.value;
+
+      // Not fetched because of robots.txt: information, not an error.
+      if (error instanceof RobotsBlockedError) {
+        await robots.skip(url, error.verdict, error.url !== url ? error.url : undefined);
+        continue;
+      }
+      if (error instanceof CrawlDelayStopError) {
+        await robots.skip(url, "host-skipped", error.url !== url ? error.url : undefined);
+        continue;
+      }
+
+      if (error || !res) {
+        const infra = matchManagedInfra(url);
+        if (infra) {
+          issues.push({
+            url,
+            type: "BROKEN_LINK",
+            severity: "INFO",
+            message: `Managed infra endpoint (${infra.provider}), expected, not a broken link`,
+            details: {
+              provider: infra.provider,
+              ...REMEDIATION.MANAGED_INFRA
+                ? { howToFix: REMEDIATION.MANAGED_INFRA.howToFix }
+                : {},
+            },
+          });
+        } else {
+          issues.push({
+            url,
+            type: "BROKEN_LINK",
+            severity: "CRITICAL",
+            message:
+              error instanceof Error ? error.message : "Fetch failed",
+            details: { howToFix: REMEDIATION.BROKEN_LINK?.howToFix },
+          });
+        }
+        continue;
+      }
+
+      if (!res.contentType.includes("html") && res.statusCode < 400) {
+        continue;
+      }
+
+      const finalNormalized = normalizeUrl(res.finalUrl, origin) || url;
+      const redirectUrl =
+        finalNormalized !== url ? finalNormalized : null;
+
+      // A redirect can resolve to a URL that's also seeded from the sitemap or
+      // linked elsewhere. Only the requested URL was marked visited, so without
+      // this the resolved page gets fetched and stored twice — inflating page
+      // counts and producing phantom DUPLICATE_TITLE/DESCRIPTION issues.
+      if (redirectUrl) {
+        if (visited.has(finalNormalized)) continue;
+        visited.add(finalNormalized);
+      }
+
+      const page = parseHtml(
+        finalNormalized,
+        res.html,
+        res.statusCode,
+        res.loadMs,
+        res.bytes,
+        redirectUrl,
+        seedUrl
+      );
+
+      // Mixed content check on raw HTML
+      if (
+        page.url.startsWith("https://") &&
+        /(?:src|href)\s*=\s*["']?http:\/\//i.test(res.html)
+      ) {
+        issues.push({
+          url: page.url,
+          type: "MIXED_CONTENT",
+          severity: "WARNING",
+          message: "Page loads insecure HTTP resources",
+          details: { howToFix: REMEDIATION.MIXED_CONTENT?.howToFix },
+        });
+      }
+
+      pages.push(page);
+      allLinks.push(...page.links);
+      issues.push(...issuesFromPage(page, origin));
+
+      // Enqueue discovered internal links
+      for (const link of page.internalOutlinks) {
+        if (!visited.has(link)) {
+          queue.push(link);
+        }
+      }
+    }
+
+    await recordProgress(pages.length);
+
+    // Small delay between batches to avoid hammering the target
+    if (queue.length > 0 && pages.length < maxPages) {
+      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+    }
+  }
+
+  /* ---- Duplicate titles / descriptions ---- */
+  const byTitle = new Map<string, string[]>();
+  const byDesc = new Map<string, string[]>();
+  for (const p of pages) {
+    if (p.title) {
+      const list = byTitle.get(p.title) || [];
+      list.push(p.url);
+      byTitle.set(p.title, list);
+    }
+    if (p.description) {
+      const list = byDesc.get(p.description) || [];
+      list.push(p.url);
+      byDesc.set(p.description, list);
+    }
+  }
+  for (const [title, urls] of byTitle) {
+    if (urls.length > 1) {
+      for (const url of urls) {
+        issues.push({
+          url,
+          type: "DUPLICATE_TITLE",
+          severity: "WARNING",
+          message: `Duplicate title shared by ${urls.length} pages`,
+          details: {
+            title,
+            urls,
+            howToFix: REMEDIATION.DUPLICATE_TITLE?.howToFix,
+          },
+        });
+      }
+    }
+  }
+  for (const [description, urls] of byDesc) {
+    if (urls.length > 1) {
+      for (const url of urls) {
+        issues.push({
+          url,
+          type: "DUPLICATE_DESCRIPTION",
+          severity: "INFO",
+          message: `Duplicate meta description on ${urls.length} pages`,
+          details: {
+            description,
+            urls,
+            howToFix: REMEDIATION.DUPLICATE_DESCRIPTION?.howToFix,
+          },
+        });
+      }
+    }
+  }
+
+  /* ---- Sitemap coverage & orphan detection ---- */
+  const crawledSet = new Set(pages.map((p) => p.url));
+  const sitemapSet = new Set(sitemapUrls);
+  const missingFromSitemap = [...crawledSet].filter(
+    (u) => sitemapSet.size > 0 && !sitemapSet.has(u)
+  );
+
+  const inlinkCount = new Map<string, number>();
+  for (const p of pages) {
+    for (const out of p.internalOutlinks) {
+      inlinkCount.set(out, (inlinkCount.get(out) || 0) + 1);
+    }
+  }
+  const orphans = pages.filter((p) => {
+    const isHome = new URL(p.url).pathname === "/" || p.url === seedUrl;
+    return !isHome && (inlinkCount.get(p.url) || 0) === 0;
+  });
+
+  for (const url of missingFromSitemap.slice(0, 50)) {
+    issues.push({
+      url,
+      type: "MISSING_SITEMAP",
+      severity: "INFO",
+      message: "Crawled page not listed in sitemap",
+      details: {
+        kind: "not_in_sitemap",
+        howToFix: REMEDIATION.MISSING_SITEMAP?.howToFix,
+      },
+    });
+  }
+
+  for (const p of orphans.slice(0, 50)) {
+    issues.push({
+      url: p.url,
+      type: "MISSING_CANONICAL",
+      severity: "WARNING",
+      message: "Potential orphan page (no internal inlinks found)",
+      details: { kind: "orphan", contentScore: p.contentScore },
+    });
+  }
+
+  const robotsReport = robots.report();
+
+  /* ---- Compute scores ---- */
+  const healthScore = computeHealthScore(issues, pages.length);
+  const avgContentScore =
+    pages.length > 0
+      ? Math.round(
+          pages.reduce((s, p) => s + p.contentScore, 0) / pages.length
+        )
+      : 0;
+
+  /* ---- Persist AuditPage records ---- */
+  if (pages.length > 0) {
+    // Batch in chunks to avoid overly large createMany calls
+    const PAGE_BATCH = 100;
+    for (let i = 0; i < pages.length; i += PAGE_BATCH) {
+      const chunk = pages.slice(i, i + PAGE_BATCH);
+      await recordProgress(pages.length);
+      await db.auditPage.createMany({
+        data: chunk.map((p) => ({
+          crawlId,
+          url: p.url,
+          statusCode: p.statusCode,
+          redirectUrl: p.redirectUrl,
+          title: p.title,
+          description: p.description,
+          canonical: p.canonical,
+          robotsMeta: p.robotsMeta,
+          h1Count: p.h1s.length,
+          h1s: p.h1s,
+          wordCount: p.wordCount,
+          imageCount: p.imageCount,
+          imagesMissingAlt: p.imagesMissingAlt,
+          internalLinks: p.internalOutlinks.length,
+          externalLinks: p.externalOutlinks.length,
+          hasSchema: p.hasSchema,
+          hreflangTags: p.hreflangTags.length > 0 ? p.hreflangTags : undefined,
+          contentScore: p.contentScore,
+          contentHash: p.contentHash,
+          responseTimeMs: p.loadMs,
+          byteSize: p.bytes,
+          indexable: p.indexable,
+        })),
+      });
+    }
+  }
+
+  /* ---- Persist AuditLink records ---- */
+  if (allLinks.length > 0) {
+    const LINK_BATCH = 200;
+    // Cap total links to avoid blowing up storage
+    const linksToStore = allLinks.slice(0, 10000);
+    for (let i = 0; i < linksToStore.length; i += LINK_BATCH) {
+      const chunk = linksToStore.slice(i, i + LINK_BATCH);
+      await recordProgress(pages.length);
+      await db.auditLink.createMany({
+        data: chunk.map((l) => ({
+          crawlId,
+          sourceUrl: l.sourceUrl,
+          targetUrl: l.targetUrl,
+          anchorText: l.anchorText,
+          isInternal: l.isInternal,
+          isNofollow: l.isNofollow,
+          statusCode: l.statusCode,
+        })),
+      });
+    }
+  }
+
+  /* ---- Persist CrawlIssue records ---- */
+  const toSave = issues.slice(0, 1000);
+  if (toSave.length) {
+    await db.crawlIssue.createMany({
+      data: toSave.map((i) => ({
+        crawlId,
+        url: i.url,
+        type: i.type,
+        severity: i.severity,
+        message: i.message,
+        details: (i.details ?? undefined) as undefined | Record<string, string | number | boolean | null>,
+      })),
+    });
+  }
+
+  // Thin content pages as INFO issues
+  const thin = pages.filter((p) => p.contentScore < 60);
+  if (thin.length) {
+    await db.crawlIssue.createMany({
+      data: thin.slice(0, 50).map((p) => ({
+        crawlId,
+        url: p.url,
+        type: "MISSING_DESCRIPTION" as IssueType,
+        severity: "INFO" as IssueSeverity,
+        message: `On-page content score ${p.contentScore}/100 (${p.wordCount} words)`,
+        details: {
+          kind: "content_score",
+          contentScore: p.contentScore,
+          wordCount: p.wordCount,
+          title: p.title,
+          h1Count: p.h1s.length,
+        },
+      })),
+    });
+  }
+
+  // Crawl summary issue
+  await db.crawlIssue.create({
+    data: {
+      crawlId,
+      url: seedUrl,
+      type: "MISSING_SCHEMA",
+      severity: "INFO",
+      message: "Crawl summary",
+      details: {
+        kind: "crawl_summary",
+        pages: pages.map((p) => ({
+          url: p.url,
+          statusCode: p.statusCode,
+          title: p.title,
+          contentScore: p.contentScore,
+          wordCount: p.wordCount,
+          outlinks: p.internalOutlinks.length,
+          externalOutlinks: p.externalOutlinks.length,
+          inlinks: inlinkCount.get(p.url) || 0,
+        })),
+        sitemapUrls: sitemapUrls.length,
+        missingFromSitemap: missingFromSitemap.length,
+        orphans: orphans.length,
+        avgContentScore,
+        robots: robotsReport,
+      },
+    },
+  });
+
+  /* ---- Finalize crawl record ---- */
+  // Count only the issues a user sees: not the summary or content score rows.
+  const finalIssues = await countVisibleIssues(db, crawlId);
+
+  await db.crawl.update({
+    where: { id: crawlId },
+    data: {
+      status: "COMPLETED",
+      finishedAt: new Date(),
+      lastProgressAt: new Date(),
+      // A crawl marked interrupted that was alive after all still completes.
+      error: null,
+      pagesFound: pages.length,
+      issuesFound: finalIssues,
+      healthScore,
+    },
+  });
+
+  return {
+    crawlId,
+    pagesFound: pages.length,
+    issuesFound: finalIssues,
+    healthScore,
+    sitemapUrls: sitemapUrls.length,
+    missingFromSitemap: missingFromSitemap.length,
+    orphanCandidates: orphans.length,
+    avgContentScore,
+    robots: robotsReport,
+  };
+}
