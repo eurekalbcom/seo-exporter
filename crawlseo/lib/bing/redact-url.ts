@@ -159,18 +159,22 @@ function redactBearer(value: string): string {
   return result + value.slice(cursor);
 }
 
+/** An unclosed `[` / `{` is not scanned past this many characters (4 KB). */
+const JSON_CONTAINER_CAP = 4096;
+
 /**
  * End of a `[` / `{` value. Quoted strings, including `\"`, do not change depth.
- * An unclosed value stops at the end of the line.
+ * A newline inside the value is whitespace. An unclosed value stops at the end
+ * of the input or after `JSON_CONTAINER_CAP` characters, whichever comes first.
  */
 function endOfJsonContainer(value: string, openAt: number): number {
+  const limit = Math.min(value.length, openAt + JSON_CONTAINER_CAP);
   const stack: string[] = [];
   let quote = "";
   let escapedQuote = false;
-  for (let i = openAt; i < value.length; i++) {
+  for (let i = openAt; i < limit; i++) {
     const ch = value[i];
     if (quote) {
-      if (ch === "\n") return i;
       if (escapedQuote) {
         if (ch === "\\" && value[i + 1] === "\\" && value[i + 2] === quote) {
           i += 2;
@@ -190,7 +194,6 @@ function endOfJsonContainer(value: string, openAt: number): number {
       if (ch === quote) quote = "";
       continue;
     }
-    if (ch === "\n") return i;
     if (ch === "\\" && (value[i + 1] === '"' || value[i + 1] === "'")) {
       quote = value[i + 1];
       escapedQuote = true;
@@ -211,7 +214,7 @@ function endOfJsonContainer(value: string, openAt: number): number {
       if (stack.length === 0) return i + 1;
     }
   }
-  return value.length;
+  return limit;
 }
 
 function redactJsonSecrets(value: string): string {
