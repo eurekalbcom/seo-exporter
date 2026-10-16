@@ -1,5 +1,8 @@
 const REDACTED = "[REDACTED]";
 
+/** A cause chain longer than this is cut off. `e.cause = e` is also cut by the WeakSet. */
+const MAX_REDACT_DEPTH = 8;
+
 /**
  * Query value as `URLSearchParams` writes it. That encoding uses `+` for a
  * space, which `encodeURIComponent` does not, so a body can echo either form.
@@ -25,24 +28,58 @@ function replaceLiteral(value: string, secret: string): string {
   return value.split(secret).join(REDACTED);
 }
 
+/** `%2F` and `%2f` are the same octet. Other characters stay case-sensitive. */
+function replaceSecret(value: string, secret: string): string {
+  if (secret.length === 0) return value;
+  if (!/%[0-9A-Fa-f]{2}/.test(secret)) return replaceLiteral(value, secret);
+  const pattern = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%[0-9A-Fa-f]{2}/g, (match) => {
+    let hex = "%";
+    for (const ch of match.slice(1)) {
+      hex += /[A-Fa-f]/.test(ch) ? `[${ch.toUpperCase()}${ch.toLowerCase()}]` : ch;
+    }
+    return hex;
+  });
+  return value.replace(new RegExp(pattern, "g"), REDACTED);
+}
+
 /**
  * Replaces every `apikey` query or fragment value. When `apiKey` is passed,
  * also replaces that literal value and its encoded forms, so a body that
- * echoes the key without an `apikey=` prefix is safe to log.
+ * echoes the key without an `apikey=` prefix is safe to log. An empty key
+ * does not match between characters.
  */
 export function redactUrl(value: string, apiKey?: string): string {
   let redacted = value;
-  if (apiKey) {
+  if (apiKey !== undefined && apiKey.length > 0) {
     for (const secret of secretVariants(apiKey)) {
-      redacted = replaceLiteral(redacted, secret);
+      redacted = replaceSecret(redacted, secret);
     }
   }
   return redacted.replace(/([?&#]apikey=)[^&#\s"'<>]*/gi, `$1${REDACTED}`);
 }
 
-function redactCause(cause: unknown, apiKey?: string): unknown {
-  if (cause instanceof Error) return redactError(cause, apiKey);
+function messageOnly(error: Error, apiKey?: string): Error {
+  const redacted = new Error(redactUrl(error.message, apiKey));
+  redacted.name = error.name;
+  if (typeof error.stack === "string") {
+    redacted.stack = redactUrl(error.stack, apiKey);
+  }
+  return redacted;
+}
+
+function redactCause(
+  cause: unknown,
+  apiKey: string | undefined,
+  seen: WeakSet<object>,
+  depth: number
+): unknown {
+  if (depth >= MAX_REDACT_DEPTH) return undefined;
+  if (cause instanceof Error) {
+    if (seen.has(cause)) return messageOnly(cause, apiKey);
+    return redactErrorLimited(cause, apiKey, seen, depth);
+  }
   if (typeof cause === "string") return redactUrl(cause, apiKey);
+  if (typeof cause === "bigint") return undefined;
   try {
     const serialized = JSON.stringify(cause);
     if (typeof serialized !== "string") return undefined;
@@ -60,13 +97,22 @@ function copyRedacted<T extends Error>(error: Error, redacted: T, apiKey?: strin
   return redacted;
 }
 
-function redactAggregate(error: AggregateError, apiKey?: string): AggregateError {
+function redactAggregate(
+  error: AggregateError,
+  apiKey: string | undefined,
+  seen: WeakSet<object>,
+  depth: number
+): AggregateError {
   const errors: unknown[] = [];
   for (const item of error.errors) {
-    const redacted = item instanceof Error ? redactError(item, apiKey) : redactCause(item, apiKey);
+    const redacted =
+      item instanceof Error
+        ? redactErrorLimited(item, apiKey, seen, depth + 1)
+        : redactCause(item, apiKey, seen, depth + 1);
     if (redacted !== undefined) errors.push(redacted);
   }
-  const cause = error.cause === undefined ? undefined : redactCause(error.cause, apiKey);
+  const cause =
+    error.cause === undefined ? undefined : redactCause(error.cause, apiKey, seen, depth + 1);
   return copyRedacted(
     error,
     new AggregateError(
@@ -78,16 +124,30 @@ function redactAggregate(error: AggregateError, apiKey?: string): AggregateError
   );
 }
 
-/** Copies an error with `redactUrl` applied to message, stack, and cause. */
-export function redactError(error: unknown, apiKey?: string): Error {
-  if (error instanceof AggregateError) return redactAggregate(error, apiKey);
+function redactErrorLimited(
+  error: unknown,
+  apiKey: string | undefined,
+  seen: WeakSet<object>,
+  depth: number
+): Error {
   if (!(error instanceof Error)) {
     return new Error(redactUrl(String(error), apiKey));
   }
-  const cause = error.cause === undefined ? undefined : redactCause(error.cause, apiKey);
+  if (depth >= MAX_REDACT_DEPTH || seen.has(error)) {
+    return messageOnly(error, apiKey);
+  }
+  seen.add(error);
+  if (error instanceof AggregateError) return redactAggregate(error, apiKey, seen, depth);
+  const cause =
+    error.cause === undefined ? undefined : redactCause(error.cause, apiKey, seen, depth + 1);
   return copyRedacted(
     error,
     new Error(redactUrl(error.message, apiKey), cause === undefined ? undefined : { cause }),
     apiKey
   );
+}
+
+/** Copies an error with `redactUrl` applied to message, stack, and cause. */
+export function redactError(error: unknown, apiKey?: string): Error {
+  return redactErrorLimited(error, apiKey, new WeakSet(), 0);
 }

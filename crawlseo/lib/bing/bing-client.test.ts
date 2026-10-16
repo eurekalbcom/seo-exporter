@@ -61,6 +61,26 @@ describe("redactUrl", () => {
       "https://ssl.bing.com/x?apikey=[REDACTED]&note=[REDACTED]"
     );
   });
+
+  it("redacts percent-encoding without regard to hex case", () => {
+    const key = "a/b c";
+    const encoded = encodeURIComponent(key);
+    const queried = new URLSearchParams({ apikey: key }).toString().slice("apikey=".length);
+    expect(encoded).toBe("a%2Fb%20c");
+    expect(queried).toBe("a%2Fb+c");
+    expect(redactUrl(`x ${encoded.toLowerCase()} y ${queried.replace("%2F", "%2f")} z`, key)).toBe(
+      "x [REDACTED] y [REDACTED] z"
+    );
+    expect(redactUrl("pre%2fsuf", "pre%2Fsuf")).toBe("[REDACTED]");
+  });
+
+  it("leaves the text in place when the key is empty", () => {
+    expect(redactUrl("keep-this", "")).toBe("keep-this");
+    expect(redactUrl("https://ssl.bing.com/x?apikey=abc&b=1", "")).toBe(
+      "https://ssl.bing.com/x?apikey=[REDACTED]&b=1"
+    );
+    expect(redactError(new Error("keep-this"), "").message).toBe("keep-this");
+  });
 });
 
 describe("redactCause", () => {
@@ -90,6 +110,51 @@ describe("redactCause", () => {
     const redacted = redactError(new Error(`boom ${key}`, { cause }), key);
     expect(redacted.cause).toBeUndefined();
     expect(redacted.message).not.toContain(key);
+  });
+
+  it("stops when an error is its own cause", () => {
+    const key = "secret/key 9f3a";
+    const error = new Error(`boom ${key}`);
+    error.stack = `Error: boom ${key}`;
+    error.cause = error;
+    const redacted = redactError(error, key);
+    expect(redacted.message).not.toContain(key);
+    expect(redacted.stack).not.toContain(key);
+    expect(redacted.cause).toBeInstanceOf(Error);
+    if (!(redacted.cause instanceof Error)) return;
+    expect(redacted.cause).not.toBe(redacted);
+    expect(redacted.cause.cause).toBeUndefined();
+    expect(redacted.cause.message).not.toContain(key);
+    expect(redacted.cause.stack).not.toContain(key);
+  });
+
+  it("stops a cause chain at eight errors", () => {
+    const key = "secret/key 9f3a";
+    let current = new Error(`level-0 ${key}`);
+    for (let level = 1; level < 20; level += 1) {
+      current = new Error(`level-${level} ${key}`, { cause: current });
+    }
+    const redacted = redactError(current, key);
+    const seen = new Set<unknown>();
+    let length = 0;
+    let cursor: unknown = redacted;
+    while (cursor instanceof Error) {
+      expect(seen.has(cursor)).toBe(false);
+      seen.add(cursor);
+      expect(cursor.message).not.toContain(key);
+      cursor = cursor.cause;
+      length += 1;
+    }
+    expect(length).toBe(8);
+  });
+
+  it("drops a BigInt cause", () => {
+    const key = "secret/key 9f3a";
+    const redacted = redactError(new Error(`boom ${key}`, { cause: 10n }), key);
+    expect(redacted.cause).toBeUndefined();
+    expect(redacted.message).not.toContain(key);
+    const nested = redactError(new Error("boom", { cause: { note: key, n: 1n } }), key);
+    expect(nested.cause).toBeUndefined();
   });
 });
 
