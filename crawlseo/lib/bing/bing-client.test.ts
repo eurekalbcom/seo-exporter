@@ -102,8 +102,23 @@ describe("redactUrl", () => {
       "https://x.test/cb?token=[REDACTED]&access_token=[REDACTED]&refresh_token=[REDACTED]&client_secret=[REDACTED]&api_key=[REDACTED]&ok=1"
     );
     expect(redactUrl('{"apikey":"sek","ok":1}')).toBe('{"apikey":"[REDACTED]","ok":1}');
+    expect(
+      redactUrl(
+        "{\"api_key\":\"sek\",\"token\":'t',\"access_token\":\"a\",\"refresh_token\":\"r\",\"client_secret\":\"c\"}"
+      )
+    ).toBe(
+      "{\"api_key\":\"[REDACTED]\",\"token\":'[REDACTED]',\"access_token\":\"[REDACTED]\",\"refresh_token\":\"[REDACTED]\",\"client_secret\":\"[REDACTED]\"}"
+    );
+    expect(redactUrl("{'client_secret':'sek'}")).toBe("{'client_secret':'[REDACTED]'}");
     expect(redactUrl("Authorization: Bearer sekret")).toBe("Authorization: [REDACTED]");
-    expect(redactUrl("Bearer sekret")).toBe("Bearer [REDACTED]");
+    expect(redactUrl('"Authorization":"Basic dXNlcjpwYXNz"')).toBe(
+      '"Authorization":"[REDACTED]"'
+    );
+    expect(redactUrl("Authorization: sekret keep-me")).toBe("Authorization: [REDACTED] keep-me");
+    expect(redactUrl("Authorization: Basic sekret keep-me")).toBe(
+      "Authorization: [REDACTED] keep-me"
+    );
+    expect(redactUrl("Bearer sekret keep-me")).toBe("Bearer [REDACTED] keep-me");
   });
 
   it("leaves the text in place when the key is empty", () => {

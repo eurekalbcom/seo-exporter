@@ -53,12 +53,16 @@ function replaceSecret(value: string, secret: string): string {
 
 const SENSITIVE_QUERY =
   /([?&#](?:access_token|refresh_token|client_secret|api_key|apikey|token)=)[^&#\s"'<>]*/gi;
-const JSON_APIKEY = /("apikey"\s*:\s*")(?:\\.|[^"\\])*(")/gi;
-const AUTHORIZATION = /authorization\s*:\s*\S+(?:\s+\S+)?/gi;
+const JSON_SECRET =
+  /(["'])(access_token|refresh_token|client_secret|api_key|apikey|token)\1(\s*:\s*)(["'])(?:\\.|[^\\])*?\4/gi;
+// A quote may sit between the header name and the colon (`"Authorization":"Basic …"`).
+// Only Bearer/Basic take a second token, so the word after the value stays.
+const AUTHORIZATION =
+  /(authorization["']?\s*:\s*["']?)(?:(?:bearer|basic)\s+)?[^\s"']+/gi;
 const BEARER = /\bbearer\s+\S+/gi;
 
 /**
- * Replaces sensitive query values, a JSON `"apikey"`, and `Authorization` /
+ * Replaces sensitive query values, JSON secrets, and `Authorization` /
  * `Bearer` headers. When `apiKey` is passed, also replaces that literal value
  * and its encoded forms, including `%25xx`. An empty key does not match
  * between characters.
@@ -72,8 +76,12 @@ export function redactUrl(value: string, apiKey?: string): string {
   }
   return redacted
     .replace(SENSITIVE_QUERY, `$1${REDACTED}`)
-    .replace(JSON_APIKEY, `$1${REDACTED}$2`)
-    .replace(AUTHORIZATION, `Authorization: ${REDACTED}`)
+    .replace(
+      JSON_SECRET,
+      (_match, keyQuote: string, name: string, colon: string, valueQuote: string) =>
+        `${keyQuote}${name}${keyQuote}${colon}${valueQuote}${REDACTED}${valueQuote}`
+    )
+    .replace(AUTHORIZATION, `$1${REDACTED}`)
     .replace(BEARER, `Bearer ${REDACTED}`);
 }
 
