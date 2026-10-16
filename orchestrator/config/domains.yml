@@ -1,0 +1,5 @@
+# Domains the orchestrator may schedule. Each name must also be on
+# CRAWL_ALLOWED_DOMAINS (default: bezkolejki.org,eurekalb.com).
+domains:
+  - bezkolejki.org
+  - eurekalb.com

@@ -1,0 +1,375 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./shadcn-tailwind.css";
+
+/*
+ * Design tokens. One layer, light theme only, taken from crawlseo.cloud
+ * (crawlseo-web docs/tokens.md). The raw values live in :root; Tailwind
+ * utilities and the shadcn names (bg-primary, text-muted-foreground, ...)
+ * point at them, so a colour is changed in one place.
+ *
+ * Two values differ from the site so app text passes WCAG AA on the grey
+ * surfaces the app has and the site does not: muted text is #616C75
+ * (site #6C7780, 4.2:1 on #F5F5F5) and success text is #137A40 (site
+ * #168346, 4.3:1 on #E7F6EC).
+ */
+
+@theme inline {
+  /* Surfaces and text */
+  --color-bg: var(--bg);
+  --color-bg-soft: var(--bg-soft);
+  --color-bg-section: var(--bg-section);
+  --color-text: var(--text);
+  --color-text-strong: var(--text-strong);
+  --color-text-muted: var(--text-muted);
+  --color-text-soft: var(--text-soft);
+  --color-text-faint: var(--text-faint);
+  --color-line-strong: var(--line-strong);
+  --color-border-soft: var(--border-soft);
+
+  /* Accent scale (vermilion) */
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+  --color-brand-950: var(--brand-950);
+
+  /* Ink surface: the CTA card of crawlseo.cloud (a card style, not a theme) */
+  --color-ink: var(--ink);
+  --color-ink-text: var(--ink-text);
+  --color-ink-lead: var(--ink-lead);
+
+  /* Buttons */
+  --color-button-primary: var(--button-primary);
+  --color-button-primary-hover: var(--button-primary-hover);
+  --color-button-secondary: var(--button-secondary);
+  --color-button-secondary-hover: var(--button-secondary-hover);
+
+  /* States */
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+
+  /* shadcn names, mapped onto the tokens above */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+
+  /* Type: Inter for UI and text, Geist Mono for uppercase labels, buttons and numbers */
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --tracking-label: 0.06em;
+
+  /* Radius: 6px for buttons, inputs, chips and nav items; 12px for cards; 16px for dialogs */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+  --radius-3xl: 16px;
+
+  --shadow-atom-1: var(--shadow-1);
+  --shadow-atom-2: var(--shadow-2);
+  --shadow-atom-3: var(--shadow-3);
+}
+
+/*
+ * Fonts. The faces are self-hosted by app/fonts.ts. The fallbacks are Arial
+ * scaled to each font's metrics (the values next/font/google generated), so
+ * text does not shift when the font arrives.
+ */
+@font-face {
+  font-family: "Inter Fallback";
+  src: local("Arial");
+  ascent-override: 90.44%;
+  descent-override: 22.52%;
+  line-gap-override: 0%;
+  size-adjust: 107.12%;
+}
+
+@font-face {
+  font-family: "Geist Mono Fallback";
+  src: local("Arial");
+  ascent-override: 74.67%;
+  descent-override: 21.92%;
+  line-gap-override: 0%;
+  size-adjust: 134.59%;
+}
+
+:root {
+  color-scheme: light;
+
+  --font-inter: "Inter", "Inter Fallback";
+  --font-geist-mono: "Geist Mono", "Geist Mono Fallback";
+
+  --bg: #ffffff;
+  --bg-soft: #fafafa;
+  --bg-section: #f5f5f5;
+  --text: #29363d;
+  --text-strong: #0a0a0a;
+  --text-muted: #616c75;
+  --text-soft: #8b9296;
+  --text-faint: #aab1b5;
+  --border-color: #e5e5e7;
+  --border-soft: #efeff1;
+  --line-strong: #d4d4d8;
+
+  --brand-50: #fff4ed;
+  --brand-100: #ffe6d4;
+  --brand-200: #ffc8a8;
+  --brand-300: #ffa270;
+  --brand-400: #ff7037;
+  --brand-500: #ff470b;
+  --brand-600: #f03006;
+  --brand-700: #c71f07;
+  --brand-800: #9e1a0e;
+  --brand-900: #7f190f;
+  --brand-950: #450805;
+
+  --ink: #0a0a0a;
+  --ink-text: #ffffff;
+  --ink-lead: #a1a1aa;
+
+  --button-primary: #e8330c;
+  --button-primary-hover: #c71f07;
+  --button-secondary: #f4f4f5;
+  --button-secondary-hover: #ebebee;
+
+  --success: #137a40;
+  --success-bg: #e7f6ec;
+  --warning: #a16207;
+  --warning-bg: #fffbeb;
+  --danger: #be123c;
+  --danger-bg: #fff1f2;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--bg);
+  --card-foreground: var(--text);
+  --popover: var(--bg);
+  --popover-foreground: var(--text);
+  --primary: var(--button-primary);
+  --primary-foreground: #ffffff;
+  --secondary: var(--button-secondary);
+  --secondary-foreground: var(--text-strong);
+  --muted: var(--bg-section);
+  --muted-foreground: var(--text-muted);
+  --accent: var(--bg-section);
+  --accent-foreground: var(--text-strong);
+  --destructive: var(--danger);
+  --border: var(--border-color);
+  --input: var(--border-color);
+  --ring: var(--brand-700);
+  --sidebar: var(--bg-soft);
+  --sidebar-foreground: var(--text);
+  --sidebar-border: var(--border-color);
+
+  /* Charts: clicks in brand 500 (3.4:1 on white, above the 3:1 for graphics), impressions in soft grey (3.2:1) */
+  --chart-1: var(--brand-500);
+  --chart-2: var(--text-soft);
+  --chart-grid: var(--border-soft);
+  --chart-axis: var(--text-muted);
+
+  --shadow-1: 0 1px 2px rgba(15, 15, 15, 0.04);
+  --shadow-2: 0 1px 2px rgba(15, 15, 15, 0.04);
+  --shadow-3: 0 16px 32px rgba(15, 15, 15, 0.08);
+}
+
+/* Mono is for uppercase text: labels, badges, table headers. */
+@utility mono-label {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-synthesis: none;
+}
+
+/* Button labels: the same mono uppercase, at 500. */
+@utility mono-button {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-synthesis: none;
+}
+
+/* Eyebrow labels: mono uppercase in brand 700, the only orange text. */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-synthesis: none;
+  color: var(--brand-700);
+}
+
+/* Text links: ink with a light 1px underline that turns orange on hover. Visited looks the same. */
+@utility text-link {
+  color: var(--text-strong);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line-strong);
+  transition: text-decoration-color 150ms ease-out;
+
+  &:hover {
+    text-decoration-color: var(--brand-500);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* Light only: the app looks the same when the OS or browser is in dark mode. */
+  html {
+    @apply h-full font-sans;
+    color-scheme: light;
+  }
+
+  body {
+    @apply min-h-full bg-background text-foreground antialiased;
+    font-size: 14px;
+    line-height: 24px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--text-strong);
+  }
+
+  b,
+  strong {
+    font-weight: 600;
+  }
+
+  /* Geist Mono is loaded at 400 and 500 only; never let the browser fake another weight. */
+  .font-mono,
+  pre,
+  code {
+    font-synthesis: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand-700);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--brand-100);
+    color: var(--text-strong);
+  }
+}
+
+@layer utilities {
+  /* Numbers, URLs, queries and code: mono in their own case, tabular figures. */
+  .font-data {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-synthesis: none;
+  }
+}
+
+/* Component classes sit below utilities, so a utility on the same element wins. */
+@layer components {
+  .panel {
+    @apply rounded-xl border border-border bg-card text-card-foreground;
+  }
+
+  .panel-muted {
+    @apply rounded-xl border border-border bg-bg-soft;
+  }
+
+  .panel-elevated {
+    @apply rounded-xl border border-border bg-card;
+    box-shadow: var(--shadow-3);
+  }
+
+  .rank-top3 {
+    color: var(--success);
+    background: var(--success-bg);
+  }
+
+  .rank-top10 {
+    color: var(--warning);
+    background: var(--warning-bg);
+  }
+
+  .rank-top20 {
+    color: var(--text-strong);
+    background: var(--bg-section);
+  }
+
+  .rank-deep {
+    color: var(--text-muted);
+    background: var(--bg-section);
+  }
+
+  .text-atom-tiny {
+    font-size: 11px;
+    line-height: 16px;
+  }
+  .text-atom-caption {
+    font-size: 12px;
+    line-height: 20px;
+  }
+  .text-atom-body {
+    font-size: 14px;
+    line-height: 24px;
+  }
+  .text-atom-subheader {
+    font-size: 17px;
+    line-height: 28px;
+    letter-spacing: -0.015em;
+  }
+  .text-atom-title {
+    font-size: 20px;
+    line-height: 28px;
+    letter-spacing: -0.015em;
+  }
+  .text-atom-heading {
+    font-size: 27px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+  .text-atom-display1 {
+    font-size: 32px;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+  }
+
+  .surface-inset {
+    @apply rounded-xl border border-border bg-bg-soft;
+  }
+}

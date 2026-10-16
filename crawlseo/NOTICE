@@ -1,0 +1,11 @@
+SEO Autopilot vendors CrawlSEO in this directory.
+
+Upstream: https://github.com/crawlseo/crawlseo
+Pinned commit: 49fd73d87a3cd86b59df8bbc41f78d10c9644596
+License: MIT (see LICENSE in this directory)
+Copyright: the CrawlSEO authors (Brandson Digital and contributors)
+
+Local changes for EUR-407 are a read-only fork: DataForSEO is removed, Bing and
+Google Autocomplete are off unless explicitly enabled, registration is closed
+by default, and external writes stay disabled until CISO GO (EUR-406).
+The crawler identifies itself as SEOAutopilotBot/0.1 (+https://eurekalb.com/bot).
