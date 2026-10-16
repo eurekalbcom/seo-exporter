@@ -220,12 +220,27 @@ describe("audit log", () => {
     expect(owner.rows[0]?.tableowner).toBe("seo_audit_owner");
     expect(owner.rows[0]?.tableowner).not.toBe("seo_app");
 
+    await db.query(
+      `INSERT INTO recommendations (id, domain, category, description, rationale, data, risk, rollback, status, score)
+       VALUES ('r-read', 'eurekalb.com', 'site_change', 'd', 'r', '{}', 'risk', 'rollback', 'proposed', 1)`
+    );
+
     await db.exec(`SET ROLE seo_app`);
     await db.query(
       `INSERT INTO audit_log (actor, action, details) VALUES ('seo_app', 'analysis', '{"executed":false}')`
     );
     const visible = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_log`);
     expect(visible.rows[0]?.n).toBe(1);
+    const recommendations = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM recommendations`);
+    expect(recommendations.rows[0]?.n).toBe(1);
+    await expect(
+      db.query(
+        `INSERT INTO recommendations (id, domain, category, description, rationale, data, risk, rollback, status, score)
+         VALUES ('r-write', 'eurekalb.com', 'site_change', 'd', 'r', '{}', 'risk', 'rollback', 'proposed', 1)`
+      )
+    ).rejects.toThrow(/permission denied/);
+    await expect(db.query(`UPDATE recommendations SET description = 'changed'`)).rejects.toThrow(/permission denied/);
+    await expect(db.query(`DELETE FROM recommendations`)).rejects.toThrow(/permission denied/);
     await expect(db.query(`UPDATE audit_log SET action = 'applied'`)).rejects.toThrow(/permission denied/);
     await expect(db.query(`DELETE FROM audit_log`)).rejects.toThrow(/permission denied/);
     await expect(db.query(`TRUNCATE audit_log`)).rejects.toThrow(/permission denied/);

@@ -11,3 +11,8 @@ GRANT SELECT, INSERT ON TABLE audit_log TO seo_app;
 REVOKE ALL ON SEQUENCE audit_log_id_seq FROM PUBLIC;
 REVOKE ALL ON SEQUENCE audit_log_id_seq FROM seo_app;
 GRANT USAGE, SELECT ON SEQUENCE audit_log_id_seq TO seo_app;
+
+-- Metrics reads recommendations. seo_app must not insert or change rows.
+REVOKE ALL ON TABLE recommendations FROM PUBLIC;
+REVOKE ALL ON TABLE recommendations FROM seo_app;
+GRANT SELECT ON TABLE recommendations TO seo_app;
