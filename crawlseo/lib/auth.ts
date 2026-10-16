@@ -4,6 +4,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import { db } from "./db";
 import { GOOGLE_OAUTH_SCOPE } from "./google/oauth-scope";
 import { isSignInAllowed } from "./registration";
+import { sealJson, withSealedAccounts } from "./google/token-seal";
 
 // Skipped during `next build` so the Docker image can be built without real
 // credentials.  NEXT_PHASE is set by Next.js; SKIP_ENV_VALIDATION is a manual
@@ -16,7 +17,7 @@ if (!isBuild && (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SEC
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(db),
+  adapter: withSealedAccounts(PrismaAdapter(db)),
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID,
@@ -54,17 +55,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           await db.user.update({
             where: { email: user.email },
             data: {
-              googleTokens: {
+              googleTokens: sealJson({
                 accessToken: account.access_token,
                 refreshToken: account.refresh_token,
                 // account.expires_at is Unix seconds; store ms to match
                 // refreshAccessToken() and getAccessToken()'s Date.now() checks.
-                expiresAt: account.expires_at
-                  ? account.expires_at * 1000
-                  : undefined,
+                expiresAt: account.expires_at ? account.expires_at * 1000 : undefined,
                 tokenType: account.token_type,
                 scope: account.scope,
-              },
+              }),
             },
           });
         } catch (error) {

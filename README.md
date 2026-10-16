@@ -62,6 +62,7 @@ This repository is the home for the read-only SEO Autopilot MVP. CrawlSEO is ven
 | `CRAWL_ALLOWED_DOMAINS` | unset (deny all) | Crawl API, MCP `run_crawl`, site create/update, and the orchestrator. An empty value also denies every domain |
 | `CRAWLSEO_HIDE_CLOUD_PROMO` | hidden | Set to `false` to show the crawlseo.cloud card |
 | `POSTGRES_PASSWORD` | unset | Compose fails if this is missing |
+| `APP_DB_PASSWORD` | unset | Password for the non-superuser `seo_app` role. Compose fails if this is missing |
 | `ORCHESTRATOR_TOKEN` | unset | `/api/internal/jobs` stays 404 |
 | `METRICS_TOKEN` | unset | `GET /metrics` stays 401 |
 | `AUTH_TRUST_HOST` | unset | Trust `X-Forwarded-Host` only when exactly `true` |

@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { openJson, sealJson } from "@/lib/google/token-seal";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
@@ -79,7 +80,7 @@ export async function getAccessToken(userId: string): Promise<string> {
     throw new Error("User has no Google OAuth tokens");
   }
 
-  const tokens = user.googleTokens as unknown as GoogleTokens;
+  const tokens = openJson<GoogleTokens>(user.googleTokens);
 
   if (!tokens.accessToken || !tokens.refreshToken) {
     throw new Error("Missing required Google OAuth tokens");
@@ -93,11 +94,11 @@ export async function getAccessToken(userId: string): Promise<string> {
     await db.user.update({
       where: { id: userId },
       data: {
-        googleTokens: {
+        googleTokens: sealJson({
           ...tokens,
           accessToken,
           expiresAt,
-        },
+        }),
       },
     });
 

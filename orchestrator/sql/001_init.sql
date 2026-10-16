@@ -41,3 +41,9 @@ CREATE TRIGGER audit_log_no_delete
 BEFORE DELETE ON audit_log
 FOR EACH ROW
 EXECUTE FUNCTION audit_log_block_mutation();
+
+-- TRUNCATE does not fire row DELETE triggers.
+CREATE TRIGGER audit_log_no_truncate
+BEFORE TRUNCATE ON audit_log
+FOR EACH STATEMENT
+EXECUTE FUNCTION audit_log_block_mutation();

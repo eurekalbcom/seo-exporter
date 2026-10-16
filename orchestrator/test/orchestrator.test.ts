@@ -194,6 +194,7 @@ describe("audit log", () => {
     );
     await expect(db.query(`UPDATE audit_log SET action = 'applied'`)).rejects.toThrow(/append-only/);
     await expect(db.query(`DELETE FROM audit_log`)).rejects.toThrow(/append-only/);
+    await expect(db.query(`TRUNCATE audit_log`)).rejects.toThrow(/append-only/);
     const remaining = await db.query(`SELECT count(*)::int AS n FROM audit_log`);
     expect(remaining.rows[0]).toMatchObject({ n: 1 });
     await expect(
@@ -202,6 +203,32 @@ describe("audit log", () => {
          VALUES ('r1', 'eurekalb.com', 'site_change', 'd', 'r', '{}', 'risk', 'rollback', 'applied', 1)`
       )
     ).rejects.toThrow();
+    await db.close();
+  });
+
+  it("lets seo_app insert and select only, and keeps a different table owner", async () => {
+    const db = new PGlite();
+    await db.exec(readFileSync(join(ROOT, "sql/001_init.sql"), "utf8"));
+    await db.exec(`
+      CREATE ROLE seo_audit_owner NOLOGIN;
+      CREATE ROLE seo_app NOLOGIN;
+    `);
+    await db.exec(readFileSync(join(ROOT, "sql/002_audit_privileges.sql"), "utf8"));
+    const owner = await db.query<{ tableowner: string }>(
+      `SELECT tableowner FROM pg_tables WHERE tablename = 'audit_log'`
+    );
+    expect(owner.rows[0]?.tableowner).toBe("seo_audit_owner");
+    expect(owner.rows[0]?.tableowner).not.toBe("seo_app");
+
+    await db.exec(`SET ROLE seo_app`);
+    await db.query(
+      `INSERT INTO audit_log (actor, action, details) VALUES ('seo_app', 'analysis', '{"executed":false}')`
+    );
+    const visible = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_log`);
+    expect(visible.rows[0]?.n).toBe(1);
+    await expect(db.query(`UPDATE audit_log SET action = 'applied'`)).rejects.toThrow(/permission denied/);
+    await expect(db.query(`DELETE FROM audit_log`)).rejects.toThrow(/permission denied/);
+    await expect(db.query(`TRUNCATE audit_log`)).rejects.toThrow(/permission denied/);
     await db.close();
   });
 });

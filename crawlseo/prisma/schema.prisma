@@ -15,7 +15,7 @@ model User {
   emailVerified DateTime?
   name          String?
   image         String?
-  googleTokens  Json?     // Encrypted GSC OAuth tokens
+  googleTokens  Json?     // Sealed envelope { enc: "v1", data }. Plaintext objects are rewritten on boot.
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -32,8 +32,8 @@ model Account {
   type               String
   provider           String
   providerAccountId  String
-  refresh_token      String?
-  access_token       String?
+  refresh_token      String? // enc:v1: ciphertext, or plaintext until the boot migration
+  access_token       String? // enc:v1: ciphertext, or plaintext until the boot migration
   expires_at         Int?
   token_type         String?
   scope              String?
