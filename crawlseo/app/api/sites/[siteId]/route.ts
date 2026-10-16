@@ -1,7 +1,20 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { assertCrawlDomainAllowed, CrawlDomainDeniedError } from "@/lib/crawl-allowlist";
 import { assertPublicDomain } from "@/lib/crawler/engine";
 import { siteDomainFromProperty } from "@/lib/site-domain";
+
+function allowlisted(domain: string): Response | null {
+  try {
+    assertCrawlDomainAllowed(domain);
+    return null;
+  } catch (error) {
+    if (error instanceof CrawlDomainDeniedError) {
+      return Response.json({ error: error.message }, { status: 403 });
+    }
+    throw error;
+  }
+}
 
 export async function GET(
   req: Request,
@@ -95,6 +108,20 @@ export async function PUT(
       return Response.json({ error: "Invalid domain" }, { status: 400 });
     }
 
+    if (normalizedDomain) {
+      const denied = allowlisted(normalizedDomain);
+      if (denied) return denied;
+    }
+
+    if (gscProperty) {
+      const propertyDomain = siteDomainFromProperty(gscProperty);
+      if (!propertyDomain) {
+        return Response.json({ error: "Invalid gscProperty" }, { status: 400 });
+      }
+      const denied = allowlisted(propertyDomain);
+      if (denied) return denied;
+    }
+
     // Same SSRF guard as POST /api/sites: the crawler fetches
     // https://${site.domain}, so a changed domain must be public too.
     if (normalizedDomain) {
@@ -122,13 +149,23 @@ export async function PUT(
       let protocol = "";
       try {
         protocol = new URL(nextBingSite).protocol;
-      } catch {}
+      } catch {
+        protocol = "";
+      }
       if (!/^https?:$/.test(protocol)) {
         return Response.json(
           { error: "bingSite must be an http(s) URL" },
           { status: 400 }
         );
       }
+      // Same hostname extraction as domain and gscProperty. The allowlist
+      // sees evil.com, not a query or fragment that ends in an allowed suffix.
+      const bingDomain = siteDomainFromProperty(nextBingSite);
+      if (!bingDomain) {
+        return Response.json({ error: "Invalid bingSite" }, { status: 400 });
+      }
+      const denied = allowlisted(bingDomain);
+      if (denied) return denied;
     }
     const change = {
       where: { id: siteId },

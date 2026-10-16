@@ -40,14 +40,19 @@ async function refreshAccessToken(
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    if (body.includes("invalid_grant")) {
+    // The body can contain the refresh token or a new access token. Detect
+    // invalid_grant locally and never put the body on the error or the logs.
+    let invalidGrant = false;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      invalidGrant = parsed.error === "invalid_grant";
+    } catch {
+      invalidGrant = false;
+    }
+    if (invalidGrant) {
       throw new ReauthRequiredError();
     }
-    throw new Error(
-      `Failed to refresh token: ${response.status} ${response.statusText}${
-        body ? `: ${body.slice(0, 500)}` : ""
-      }`
-    );
+    throw new Error(`Failed to refresh token: ${response.status} ${response.statusText}`);
   }
 
   const data = (await response.json()) as {

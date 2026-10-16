@@ -9,11 +9,7 @@ import {
   WriteDisabledError,
   writeMode,
 } from "./write-mode";
-import {
-  crawlAllowedDomains,
-  DEFAULT_CRAWL_ALLOWED_DOMAINS,
-  isCrawlDomainAllowed,
-} from "./crawl-allowlist";
+import { crawlAllowedDomains, isCrawlDomainAllowed } from "./crawl-allowlist";
 import { isAutocompleteEnabled, isBingEnabled } from "./flags";
 import { escapeHtml, asUntrustedData } from "./untrusted";
 import { renderPrometheus } from "./metrics";
@@ -121,14 +117,31 @@ describe("read-only MVP guards", () => {
     spy.mockRestore();
   });
 
-  it("allows only the configured crawl domains, defaulting to Eureka properties", () => {
-    expect(crawlAllowedDomains()).toEqual([...DEFAULT_CRAWL_ALLOWED_DOMAINS]);
-    expect(isCrawlDomainAllowed("bezkolejki.org")).toBe(true);
+  it("denies every crawl domain when CRAWL_ALLOWED_DOMAINS is unset or empty", () => {
+    expect(crawlAllowedDomains()).toEqual([]);
+    expect(isCrawlDomainAllowed("bezkolejki.org")).toBe(false);
+    expect(isCrawlDomainAllowed("eurekalb.com")).toBe(false);
+    process.env.CRAWL_ALLOWED_DOMAINS = "";
+    expect(crawlAllowedDomains()).toEqual([]);
+    expect(isCrawlDomainAllowed("bezkolejki.org")).toBe(false);
+    process.env.CRAWL_ALLOWED_DOMAINS = "   ";
+    expect(crawlAllowedDomains()).toEqual([]);
+
+    process.env.CRAWL_ALLOWED_DOMAINS = "allowed.pl,eurekalb.com";
+    expect(isCrawlDomainAllowed("allowed.pl")).toBe(true);
     expect(isCrawlDomainAllowed("www.eurekalb.com")).toBe(true);
     expect(isCrawlDomainAllowed("https://blog.eurekalb.com/path")).toBe(true);
+    expect(isCrawlDomainAllowed("allowed.pl.")).toBe(true);
     expect(isCrawlDomainAllowed("example.com")).toBe(false);
-    process.env.CRAWL_ALLOWED_DOMAINS = "";
-    expect(isCrawlDomainAllowed("bezkolejki.org")).toBe(false);
+    for (const crafted of [
+      "https://evil.com/?x=allowed.pl",
+      "https://evil.com#allowed.pl",
+      "https://allowed.pl.evil.com",
+      "https://allowed.pl@evil.com",
+      "evil.com?x=allowed.pl",
+    ]) {
+      expect(isCrawlDomainAllowed(crafted)).toBe(false);
+    }
   });
 
   it("escapes crawled text and strips instruction-shaped phrases", () => {

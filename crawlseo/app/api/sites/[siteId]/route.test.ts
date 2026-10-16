@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { db, tx, lookup, row } = vi.hoisted(() => {
   const row = {
@@ -47,7 +47,9 @@ const DNS: Record<string, string> = {
   "internal.example": "10.0.0.5",
   "loopback.example": "127.0.0.1",
   "metadata.example": "169.254.169.254",
+  "allowed-private.example": "10.0.0.5",
   "new-site.com": "93.184.216.34",
+  "evil.example": "93.184.216.34",
 };
 
 function put(body: unknown) {
@@ -58,6 +60,8 @@ function put(body: unknown) {
 }
 
 beforeEach(() => {
+  process.env.CRAWL_ALLOWED_DOMAINS =
+    "quilltab.app,new-site.com,new.example,old.example,b.example,missing.eurekalb.com,allowed-private.example";
   vi.clearAllMocks();
   Object.assign(row, {
     domain: "quilltab.app",
@@ -71,23 +75,36 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  delete process.env.CRAWL_ALLOWED_DOMAINS;
+});
+
 describe("PUT /api/sites/[siteId] domain", () => {
-  it.each(["internal.example", "loopback.example", "metadata.example", "127.0.0.1", "http://127.0.0.1:8080"])(
-    "rejects %s and leaves the row unchanged",
+  it.each(["internal.example", "loopback.example", "metadata.example", "127.0.0.1", "http://127.0.0.1:8080", "evil.example"])(
+    "rejects %s because it is off CRAWL_ALLOWED_DOMAINS and leaves the row unchanged",
     async (domain) => {
       const res = await put({ domain });
 
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: "Domain must resolve to a public IP address" });
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toMatch(/CRAWL_ALLOWED_DOMAINS/);
+      expect(lookup).not.toHaveBeenCalled();
       expect(db.site.update).not.toHaveBeenCalled();
       expect(row.domain).toBe("quilltab.app");
     }
   );
 
+  it("still rejects an allowlisted domain that resolves to a private address", async () => {
+    const res = await put({ domain: "allowed-private.example" });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Domain must resolve to a public IP address" });
+    expect(db.site.update).not.toHaveBeenCalled();
+  });
+
   it("rejects a domain that does not resolve", async () => {
     lookup.mockRejectedValueOnce(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }));
 
-    const res = await put({ domain: "nope.invalid" });
+    const res = await put({ domain: "missing.eurekalb.com" });
 
     expect(res.status).toBe(400);
     expect(db.site.update).not.toHaveBeenCalled();
@@ -103,10 +120,10 @@ describe("PUT /api/sites/[siteId] domain", () => {
   });
 
   it("checks and stores the normalized hostname, not the raw input", async () => {
-    const blocked = await put({ domain: "https://internal.example/blog/" });
+    const blocked = await put({ domain: "https://allowed-private.example/blog/" });
 
     expect(blocked.status).toBe(400);
-    expect(lookup).toHaveBeenCalledWith("internal.example", { all: true });
+    expect(lookup).toHaveBeenCalledWith("allowed-private.example", { all: true });
     expect(row.domain).toBe("quilltab.app");
 
     const allowed = await put({ domain: "https://new-site.com/blog/" });
@@ -122,6 +139,30 @@ describe("PUT /api/sites/[siteId] domain", () => {
     expect(res.status).toBe(200);
     expect(lookup).not.toHaveBeenCalled();
     expect(row.domain).toBe("quilltab.app");
+  });
+
+  it("rejects a gsc property and a Bing URL outside the allowlist", async () => {
+    expect((await put({ gscProperty: "sc-domain:evil.example" })).status).toBe(403);
+    expect((await put({ bingSite: "https://evil.example/" })).status).toBe(403);
+    expect(db.site.update).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://evil.com/?x=allowed.pl",
+    "https://evil.com#allowed.pl",
+    "https://allowed.pl.evil.com",
+    "https://allowed.pl@evil.com",
+  ])("rejects Bing URL %s whose hostname is not the allowlisted host", async (bingSite) => {
+    process.env.CRAWL_ALLOWED_DOMAINS = "allowed.pl";
+
+    const res = await put({ bingSite });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/CRAWL_ALLOWED_DOMAINS/);
+    expect(db.site.update).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(row.bingSite).toBe("https://old.example/");
   });
 });
 

@@ -5,6 +5,9 @@ vi.mock("dns/promises", () => ({ lookup, default: { lookup } }));
 vi.mock("@/lib/db", () => ({ db: {} }));
 
 import { fetchText, isPrivateIp } from "./engine";
+import { allowCrawlerTestDomains } from "./test-allowlist";
+
+allowCrawlerTestDomains();
 
 describe("isPrivateIp", () => {
   it.each([

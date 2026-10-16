@@ -17,6 +17,9 @@ vi.mock("@/lib/db", async () => {
 
 import { createTestDb, type TestDb } from "@/lib/testing/pglite";
 import { runSiteCrawl } from "./engine";
+import { allowCrawlerTestDomains } from "./test-allowlist";
+
+allowCrawlerTestDomains();
 
 const PAGES = 20; // home + 20 pages: batches of 1, 15 and 5
 

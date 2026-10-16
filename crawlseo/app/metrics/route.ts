@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { bearerMatches } from "@/lib/secret-compare";
 import { renderPrometheus, type MetricSample } from "@/lib/metrics";
 
 type CountRow = { domain: string; value: number };
@@ -94,7 +95,10 @@ async function recommendationSamples(): Promise<MetricSample[]> {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  if (!bearerMatches(req.headers.get("authorization"), process.env.METRICS_TOKEN)) {
+    return new Response("unauthorized\n", { status: 401 });
+  }
   try {
     const samples = [
       ...(await searchSamples()),

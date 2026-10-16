@@ -59,10 +59,12 @@ This repository is the home for the read-only SEO Autopilot MVP. CrawlSEO is ven
 | `AUTOCOMPLETE_ENABLED` | off | Keyword research returns 404 and no suggestion fetch runs |
 | `DISABLE_REGISTRATION` | closed | Set to `false` only to create the first account |
 | `ALLOWED_EMAILS` | empty (deny) | Comma-separated sign-in allowlist |
-| `CRAWL_ALLOWED_DOMAINS` | `bezkolejki.org,eurekalb.com` | Crawl API, MCP `run_crawl`, and the orchestrator |
+| `CRAWL_ALLOWED_DOMAINS` | unset (deny all) | Crawl API, MCP `run_crawl`, site create/update, and the orchestrator. An empty value also denies every domain |
 | `CRAWLSEO_HIDE_CLOUD_PROMO` | hidden | Set to `false` to show the crawlseo.cloud card |
 | `POSTGRES_PASSWORD` | unset | Compose fails if this is missing |
 | `ORCHESTRATOR_TOKEN` | unset | `/api/internal/jobs` stays 404 |
+| `METRICS_TOKEN` | unset | `GET /metrics` stays 401 |
+| `AUTH_TRUST_HOST` | unset | Trust `X-Forwarded-Host` only when exactly `true` |
 
 Secrets stay in the environment. Do not commit `.env` files or keys.
 
@@ -85,4 +87,4 @@ npm ci
 npm test
 ```
 
-MCP is stdio only: `npm run mcp` inside `crawlseo/`. Postgres is on the compose internal network and has no published port.
+MCP is stdio only: `npm run mcp` inside `crawlseo/`. Postgres is on the compose internal network and has no published port. The app port is `127.0.0.1:3000`.

@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { assertCrawlDomainAllowed, CrawlDomainDeniedError } from "@/lib/crawl-allowlist";
 import { assertPublicDomain } from "@/lib/crawler/engine";
 import { syncGSCDataForSite } from "@/lib/workers/gsc-sync";
 import { ensureDefaultAlerts } from "@/lib/alerts/evaluate";
@@ -54,7 +55,10 @@ export async function POST(req: Request) {
 
     // Any client-sent `domain` is ignored: it is derived from the property
     // here so a bad client can never store "//host/" again.
-    const { gscProperty } = (await req.json()) as { gscProperty?: string };
+    const { gscProperty, bingSite } = (await req.json()) as {
+      gscProperty?: string;
+      bingSite?: string;
+    };
 
     if (typeof gscProperty !== "string" || !gscProperty.trim()) {
       return Response.json({ error: "Missing gscProperty" }, { status: 400 });
@@ -66,6 +70,47 @@ export async function POST(req: Request) {
         { error: "Could not derive a domain from gscProperty" },
         { status: 400 }
       );
+    }
+
+    try {
+      assertCrawlDomainAllowed(domain);
+    } catch (error) {
+      if (error instanceof CrawlDomainDeniedError) {
+        return Response.json({ error: error.message }, { status: 403 });
+      }
+      throw error;
+    }
+
+    if (bingSite !== undefined) {
+      if (typeof bingSite !== "string") {
+        return Response.json({ error: "bingSite must be a string" }, { status: 400 });
+      }
+      if (bingSite) {
+        let protocol = "";
+        try {
+          protocol = new URL(bingSite).protocol;
+        } catch {
+          protocol = "";
+        }
+        if (!/^https?:$/.test(protocol)) {
+          return Response.json(
+            { error: "bingSite must be an http(s) URL" },
+            { status: 400 }
+          );
+        }
+        const bingDomain = siteDomainFromProperty(bingSite);
+        if (!bingDomain) {
+          return Response.json({ error: "Invalid bingSite" }, { status: 400 });
+        }
+        try {
+          assertCrawlDomainAllowed(bingDomain);
+        } catch (error) {
+          if (error instanceof CrawlDomainDeniedError) {
+            return Response.json({ error: error.message }, { status: 403 });
+          }
+          throw error;
+        }
+      }
     }
 
     // Reject domains that resolve to private/internal IPs (SSRF protection)
