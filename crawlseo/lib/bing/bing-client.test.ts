@@ -4,7 +4,13 @@ import { encrypt } from "@/lib/encryption";
 const db = vi.hoisted(() => ({ apiKey: { findUnique: vi.fn() } }));
 vi.mock("@/lib/db", () => ({ db }));
 
-import { fetchBingCrawlStats, fetchBingTraffic, getBingApiKey, testBingKey } from "./bing-client";
+import {
+  BingKeyMissingError,
+  fetchBingCrawlStats,
+  fetchBingTraffic,
+  getBingApiKey,
+  testBingKey,
+} from "./bing-client";
 import { redactError, redactUrl } from "./redact-url";
 
 function bingAnswers(rows: unknown[]) {
@@ -72,6 +78,32 @@ describe("redactUrl", () => {
       "x [REDACTED] y [REDACTED] z"
     );
     expect(redactUrl("pre%2fsuf", "pre%2Fsuf")).toBe("[REDACTED]");
+  });
+
+  it("redacts a double-encoded percent sequence", () => {
+    const key = "a/b c";
+    const once = encodeURIComponent(key);
+    const twice = encodeURIComponent(once);
+    expect(once).toBe("a%2Fb%20c");
+    expect(twice).toBe("a%252Fb%2520c");
+    expect(redactUrl(twice.toLowerCase(), key)).toBe("[REDACTED]");
+    expect(redactUrl(once.toLowerCase(), key)).toBe("[REDACTED]");
+    const queried = new URLSearchParams({ apikey: key }).toString().slice("apikey=".length);
+    const doubled = queried.replace(/%/g, "%25").replace("%252F", "%252f");
+    expect(redactUrl(doubled, key)).toBe("[REDACTED]");
+  });
+
+  it("redacts tokens, a JSON apikey, and auth headers without knowing the key", () => {
+    expect(
+      redactUrl(
+        "https://x.test/cb?token=sek&access_token=a&refresh_token=b&client_secret=c&api_key=d&ok=1"
+      )
+    ).toBe(
+      "https://x.test/cb?token=[REDACTED]&access_token=[REDACTED]&refresh_token=[REDACTED]&client_secret=[REDACTED]&api_key=[REDACTED]&ok=1"
+    );
+    expect(redactUrl('{"apikey":"sek","ok":1}')).toBe('{"apikey":"[REDACTED]","ok":1}');
+    expect(redactUrl("Authorization: Bearer sekret")).toBe("Authorization: [REDACTED]");
+    expect(redactUrl("Bearer sekret")).toBe("Bearer [REDACTED]");
   });
 
   it("leaves the text in place when the key is empty", () => {
@@ -350,6 +382,34 @@ describe("a Bing error response", () => {
     expect(caught.message).toContain("[REDACTED]");
   });
 
+  it("caps a JSON Message at 300 characters", async () => {
+    const key = "secret/key 9f3a";
+    const marker = "TAIL-MARKER-SHOULD-BE-CUT";
+    const message = `${key}${"y".repeat(400)}${marker}${key}`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ErrorCode: 1, Message: message }), { status: 400 })
+      )
+    );
+
+    let caught: unknown;
+    try {
+      await fetchBingTraffic(key, "https://a.example/");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) return;
+    const prefix = "Bing GetRankAndTrafficStats failed: 400 ";
+    expect(caught.message.startsWith(prefix)).toBe(true);
+    expect(caught.message.length - prefix.length).toBeLessThanOrEqual(300);
+    expect(caught.message).not.toContain(key);
+    expect(caught.message).not.toContain(marker);
+  });
+
   it("strips the key from a non-OK plain body", async () => {
     const key = "secret/key 9f3a";
     const encoded = encodeURIComponent(key);
@@ -374,14 +434,40 @@ describe("a Bing error response", () => {
   });
 });
 
+describe("an error class after redaction", () => {
+  it("keeps BingKeyMissingError and TimeoutError", () => {
+    const missing = redactError(new BingKeyMissingError());
+    expect(missing).toBeInstanceOf(BingKeyMissingError);
+    expect(missing.name).toBe("BingKeyMissingError");
+
+    const key = "secret/key 9f3a";
+    const timeout = new DOMException(`aborted ${key}`, "TimeoutError");
+    timeout.stack = `TimeoutError: aborted ${key}`;
+    const redacted = redactError(timeout, key);
+    expect(redacted).toBeInstanceOf(DOMException);
+    expect(redacted.name).toBe("TimeoutError");
+    expect(redacted.message).not.toContain(key);
+    expect(redacted.stack).not.toContain(key);
+  });
+});
+
 describe("testBingKey", () => {
   it("returns false when the request fails", async () => {
+    const key = "secret/key 9f3a";
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        throw new Error("secret/key 9f3a");
+        throw new Error(key);
       })
     );
-    expect(await testBingKey("secret/key 9f3a")).toBe(false);
+    try {
+      expect(await testBingKey(key)).toBe(false);
+      const logged = spy.mock.calls.flat().map((part) => String(part)).join("\n");
+      expect(logged).not.toContain(key);
+      expect(logged).not.toContain(encodeURIComponent(key));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -96,7 +96,7 @@ async function bingGet<T>(
           detail = redactUrl(
             `ErrorCode ${parsed.ErrorCode}${parsed.Message ? ` - ${parsed.Message}` : ""}`,
             apiKey
-          );
+          ).slice(0, 300);
         }
       } catch {
         // fall back to the raw body
