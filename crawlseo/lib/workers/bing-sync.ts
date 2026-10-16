@@ -1,3 +1,4 @@
+import { redactUrl } from "@/lib/bing/redact-url";
 import { db } from "@/lib/db";
 import { isBingEnabled } from "@/lib/flags";
 import {
@@ -203,7 +204,7 @@ export async function syncBingDataForSite(
       ...(failed.length > 0 && { partial: failed }),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = redactUrl(error instanceof Error ? error.message : "Unknown error");
     console.error(`[Bing Sync] Error syncing site ${siteId}:`, message);
     return { success: false, ...empty, error: message };
   }
