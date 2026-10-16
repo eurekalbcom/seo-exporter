@@ -11,7 +11,13 @@ export async function register() {
     const { startOptionalWorkers } = await import("@/lib/workers/optional");
     startOptionalWorkers();
     const { db } = await import("@/lib/db");
+    const { migrateGoogleTokens } = await import("@/lib/google/token-seal");
     const { recoverCrawlsOnStartup } = await import("@/lib/crawler/lifecycle");
+    // Seal leftover plaintext Google tokens. The error is not logged: Prisma
+    // can attach query values, and those values are the tokens.
+    void migrateGoogleTokens(db).catch(() => {
+      console.error("Google token seal migration failed");
+    });
     void recoverCrawlsOnStartup(db);
   }
 }

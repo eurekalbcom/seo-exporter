@@ -4,6 +4,7 @@ import { lookup } from "dns/promises";
 import { BlockList, isIPv4, isIPv6, type LookupFunction } from "net";
 import { Agent } from "undici";
 import { assertCrawlDomainAllowed } from "@/lib/crawl-allowlist";
+import { writeGuardInterceptor } from "@/lib/write-mode";
 import { db } from "@/lib/db";
 import type { IssueSeverity, IssueType } from "@prisma/client";
 import { REMEDIATION } from "./remediation";
@@ -270,7 +271,9 @@ export const pinnedLookup: LookupFunction = (hostname, options, callback) => {
 };
 
 /** Dispatcher of every crawler request: pages, redirect hops, robots.txt, sitemaps. */
-export const crawlerDispatcher = new Agent({ connect: { lookup: pinnedLookup } });
+export const crawlerDispatcher = new Agent({ connect: { lookup: pinnedLookup } }).compose(
+  writeGuardInterceptor()
+);
 
 /**
  * Validates that a domain string resolves to a public IP.

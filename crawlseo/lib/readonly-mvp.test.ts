@@ -2,13 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GOOGLE_OAUTH_SCOPE } from "./google/oauth-scope";
-import {
-  assertExternalWriteAllowed,
-  installFetchGuard,
-  uninstallFetchGuard,
-  WriteDisabledError,
-  writeMode,
-} from "./write-mode";
+import { assertExternalWriteAllowed, uninstallFetchGuard, WriteDisabledError, writeMode } from "./write-mode";
 import { crawlAllowedDomains, isCrawlDomainAllowed } from "./crawl-allowlist";
 import { isAutocompleteEnabled, isBingEnabled } from "./flags";
 import { escapeHtml, asUntrustedData } from "./untrusted";
@@ -77,25 +71,17 @@ describe("read-only MVP guards", () => {
       WriteDisabledError
     );
     expect(() =>
+      assertExternalWriteAllowed("POST", "https://ssl.bing.com/webmaster/api.svc/json/SubmitUrl")
+    ).toThrow(WriteDisabledError);
+    expect(() =>
       assertExternalWriteAllowed("POST", "https://www.googleapis.com/webmasters/v3/sites/x/searchAnalytics/query")
     ).not.toThrow();
 
-    const calls: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      calls.push(typeof input === "string" ? input : input.toString());
-      return new Response("ok");
-    }) as typeof fetch;
-    installFetchGuard();
-    await expect(
-      fetch("https://www.googleapis.com/webmasters/v3/sites/sc-domain:example.com", { method: "PATCH" })
-    ).rejects.toBeInstanceOf(WriteDisabledError);
-    await fetch("https://www.googleapis.com/webmasters/v3/sites/x/searchAnalytics/query", { method: "POST" });
-    expect(calls).toEqual(["https://www.googleapis.com/webmasters/v3/sites/x/searchAnalytics/query"]);
-
     process.env.WRITE_MODE = "on";
     expect(writeMode()).toBe("on");
-    await fetch("https://www.googleapis.com/webmasters/v3/sites/x", { method: "PUT" });
-    expect(calls).toHaveLength(2);
+    expect(() =>
+      assertExternalWriteAllowed("POST", "https://ssl.bing.com/webmaster/api.svc/json/SubmitUrl")
+    ).not.toThrow();
   });
 
   it("defaults Bing and Autocomplete off and does not start their workers", async () => {

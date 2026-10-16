@@ -1,4 +1,23 @@
-const MUTATING_METHODS = new Set(["PUT", "PATCH", "DELETE"]);
+import { Agent, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Non-safe methods are allowed only when the host and path match one of these
+ * Google read calls. POST /webmasters/v3/sites (add a property) is not here.
+ * Search Analytics query and URL Inspection are reads that Google exposes as POST.
+ */
+const GOOGLE_READS: Array<{ host: string; method: string; path: RegExp }> = [
+  { host: "oauth2.googleapis.com", method: "POST", path: /^\/token$/ },
+  { host: "www.googleapis.com", method: "GET", path: /^\/webmasters\/v3\/sites(?:\/|$)/ },
+  {
+    host: "www.googleapis.com",
+    method: "POST",
+    path: /^\/webmasters\/v3\/sites\/[^/]+\/searchAnalytics\/query$/,
+  },
+  { host: "www.googleapis.com", method: "GET", path: /^\/pagespeedonline\/v5\/runPagespeed$/ },
+  { host: "searchconsole.googleapis.com", method: "POST", path: /^\/v1\/urlInspection\/index:inspect$/ },
+];
 
 export class WriteDisabledError extends Error {
   constructor(target: string) {
@@ -14,29 +33,40 @@ export function writeMode(): WriteMode {
   return process.env.WRITE_MODE?.trim().toLowerCase() === "on" ? "on" : "off";
 }
 
-function hostname(url: string): string | null {
-  try {
-    return new URL(url).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
 function isLocalHost(host: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
+/** True when this host, method, and path are a known Google read. */
+export function isGoogleRead(method: string, url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const upper = method.toUpperCase();
+  return GOOGLE_READS.some((rule) => rule.host === host && rule.method === upper && rule.path.test(parsed.pathname));
+}
+
 /**
- * PUT, PATCH, and DELETE to any non-local host are external writes.
- * Search Console query calls are POST and stay allowed: they do not mutate
- * the property. Relative URLs (this app's own API) are not external.
+ * WRITE_MODE=off allows safe methods, this app's own host, and the Google
+ * read allowlist. Every other method, including POST to Bing SubmitUrl, is
+ * refused. WRITE_MODE=on does not add write endpoints; it only lifts this guard.
  */
 export function isBlockedExternalWrite(method: string, url: string): boolean {
   if (writeMode() === "on") return false;
-  if (!MUTATING_METHODS.has(method.toUpperCase())) return false;
-  const host = hostname(url);
-  if (!host) return false;
-  return !isLocalHost(host);
+  const upper = method.toUpperCase();
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (isLocalHost(parsed.hostname.toLowerCase())) return false;
+  if (SAFE_METHODS.has(upper)) return false;
+  return !isGoogleRead(upper, url);
 }
 
 export function assertExternalWriteAllowed(method: string, url: string): void {
@@ -45,28 +75,43 @@ export function assertExternalWriteAllowed(method: string, url: string): void {
   }
 }
 
-type FetchFn = typeof fetch;
+function requestUrl(opts: Dispatcher.DispatchOptions): string {
+  const origin = opts.origin instanceof URL ? opts.origin.origin : String(opts.origin ?? "");
+  const path = String(opts.path ?? "/");
+  const base = origin || "https://missing-origin.invalid";
+  try {
+    return new URL(path, base).toString();
+  } catch {
+    return `${base}${path}`;
+  }
+}
+
+/** Undici dispatch interceptor. Covers fetch, undici.request, and libraries that use the global dispatcher. */
+export function writeGuardInterceptor(): Dispatcher.DispatcherComposeInterceptor {
+  return (dispatch) => (opts, handler) => {
+    const method = String(opts.method ?? "GET");
+    const url = requestUrl(opts);
+    if (isBlockedExternalWrite(method, url)) {
+      handler.onError?.(new WriteDisabledError(url));
+      return false;
+    }
+    return dispatch(opts, handler);
+  };
+}
 
 let installed = false;
-let originalFetch: FetchFn | null = null;
+let previous: Dispatcher | null = null;
 
 /** One process-wide guard. Idempotent. */
 export function installFetchGuard(): void {
   if (installed) return;
-  originalFetch = globalThis.fetch.bind(globalThis);
-  const base = originalFetch;
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-    const url =
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    assertExternalWriteAllowed(method, url);
-    return base(input, init);
-  }) as FetchFn;
+  previous = getGlobalDispatcher();
+  setGlobalDispatcher(new Agent().compose(writeGuardInterceptor()));
   installed = true;
 }
 
 export function uninstallFetchGuard(): void {
-  if (originalFetch) globalThis.fetch = originalFetch;
-  originalFetch = null;
+  if (previous) setGlobalDispatcher(previous);
+  previous = null;
   installed = false;
 }
