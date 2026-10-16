@@ -135,6 +135,17 @@ describe("redactUrl", () => {
     expect(redactUrl(aws4)).toBe("Authorization: [REDACTED]");
     expect(redactUrl(lower)).toBe("authorization: [REDACTED]");
     expect(redactUrl(quotedBearer)).toBe('"Bearer [REDACTED]"');
+    expect(redactUrl('{\\"Authorization\\":\\"Basic dXNlcjpwYXNz\\"}')).toBe(
+      '{\\"Authorization\\":\\"[REDACTED]\\"}'
+    );
+    expect(redactUrl("Authorization: Token abc,def")).toBe("Authorization: [REDACTED]");
+    expect(redactUrl("Authorization: Token abc,def\nkeep")).toBe("Authorization: [REDACTED]\nkeep");
+    expect(redactUrl('"token":12345')).toBe('"token":[REDACTED]');
+    expect(redactUrl('{"token":12345,"ok":1}')).toBe('{"token":[REDACTED],"ok":1}');
+    expect(redactUrl('{"token":12345}')).toBe('{"token":[REDACTED]}');
+    expect(redactUrl('{"token":true,"ok":1}')).toBe('{"token":[REDACTED],"ok":1}');
+    expect(redactUrl('{"token":null}')).toBe('{"token":[REDACTED]}');
+    expect(redactUrl('{\\"token\\":12345,"ok":1}')).toBe('{\\"token\\":[REDACTED],"ok":1}');
 
     for (const secret of [
       "xyz-token-9f3a",

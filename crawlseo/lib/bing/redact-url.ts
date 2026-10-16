@@ -55,7 +55,7 @@ const SENSITIVE_QUERY =
   /([?&#](?:access_token|refresh_token|client_secret|api_key|apikey|token)=)[^&#\s"'<>]*/gi;
 const JSON_KEY =
   /\\?(["'])(access_token|refresh_token|client_secret|api_key|apikey|token)\\?\1\s*:\s*/gi;
-const AUTHORIZATION_MARK = /authorization["']?\s*:\s*/gi;
+const AUTHORIZATION_MARK = /authorization\\?["']?\s*:\\?\s*/gi;
 const BEARER_MARK = /\bbearer\b/gi;
 
 function closingQuote(value: string, start: number, quote: string, escaped: boolean): number {
@@ -74,8 +74,17 @@ function closingQuote(value: string, start: number, quote: string, escaped: bool
   return value.length;
 }
 
-/** A comma ends an unquoted header unless it continues `name=` pairs (Digest, AWS4). */
-function endOfAuthValue(value: string, start: number): number {
+/** Digest and AWS4 keep comma-separated `name=` pairs. Every other scheme runs to EOL. */
+function authStopsAtComma(value: string, start: number): boolean {
+  const scheme = /^[A-Za-z0-9][A-Za-z0-9._-]*/.exec(value.slice(start))?.[0]?.toLowerCase() ?? "";
+  return scheme === "digest" || scheme === "aws4-hmac-sha256";
+}
+
+/**
+ * End of an unquoted auth value. A comma ends it only for Digest and AWS4,
+ * and only when the next piece is not another `name=` pair.
+ */
+function endOfAuthValue(value: string, start: number, stopAtComma: boolean): number {
   let quote = "";
   for (let i = start; i < value.length; i++) {
     const ch = value[i];
@@ -92,14 +101,14 @@ function endOfAuthValue(value: string, start: number): number {
       quote = ch;
       continue;
     }
-    if (ch === "," && !/^\s*[A-Za-z0-9_-]+=/.test(value.slice(i + 1))) return i;
+    if (stopAtComma && ch === "," && !/^\s*[A-Za-z0-9_-]+=/.test(value.slice(i + 1))) return i;
   }
   return value.length;
 }
 
 /**
- * Any scheme, through the closing quote, a comma that does not continue
- * `name=` pairs, or the end of the line.
+ * Any scheme, through the closing quote or the end of the line. Digest and
+ * AWS4 may also stop at a comma that does not continue `name=` pairs.
  */
 function redactAuthorization(value: string): string {
   let result = "";
@@ -111,9 +120,11 @@ function redactAuthorization(value: string): string {
     result += value.slice(cursor, openAt);
     if (value[openAt] === '"' || value[openAt] === "'") {
       const quote = value[openAt];
-      const end = closingQuote(value, openAt + 1, quote, false);
+      const escaped = value[openAt - 1] === "\\";
+      const end = closingQuote(value, openAt + 1, quote, escaped);
       result += quote + REDACTED;
       if (end < value.length && value[end] === quote) {
+        if (escaped && value[end - 1] === "\\") result += "\\";
         result += quote;
         cursor = end + 1;
       } else {
@@ -122,7 +133,7 @@ function redactAuthorization(value: string): string {
       continue;
     }
     result += REDACTED;
-    cursor = endOfAuthValue(value, openAt);
+    cursor = endOfAuthValue(value, openAt, authStopsAtComma(value, openAt));
   }
   return result + value.slice(cursor);
 }
@@ -143,7 +154,7 @@ function redactBearer(value: string): string {
       continue;
     }
     result += " " + REDACTED;
-    cursor = endOfAuthValue(value, after);
+    cursor = endOfAuthValue(value, after, false);
   }
   return result + value.slice(cursor);
 }
@@ -159,8 +170,17 @@ function redactJsonSecrets(value: string): string {
     if (escaped) i += 1;
     const quote = value[i];
     if (quote !== '"' && quote !== "'") {
-      result += value.slice(cursor, i);
-      cursor = i;
+      let end = i;
+      while (
+        end < value.length &&
+        value[end] !== "," &&
+        value[end] !== "}" &&
+        value[end] !== "\n"
+      ) {
+        end += 1;
+      }
+      result += value.slice(cursor, i) + REDACTED;
+      cursor = end;
       continue;
     }
     const end = closingQuote(value, i + 1, quote, escaped);
