@@ -4,7 +4,8 @@ import { encrypt } from "@/lib/encryption";
 const db = vi.hoisted(() => ({ apiKey: { findUnique: vi.fn() } }));
 vi.mock("@/lib/db", () => ({ db }));
 
-import { fetchBingCrawlStats, fetchBingTraffic, getBingApiKey } from "./bing-client";
+import { fetchBingCrawlStats, fetchBingTraffic, getBingApiKey, testBingKey } from "./bing-client";
+import { redactError, redactUrl } from "./redact-url";
 
 function bingAnswers(rows: unknown[]) {
   vi.stubGlobal(
@@ -19,6 +20,77 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("redactUrl", () => {
+  it("replaces the apikey value and leaves the rest of the URL", () => {
+    const raw =
+      "https://ssl.bing.com/webmaster/api.svc/json/GetUserSites?siteUrl=https%3A%2F%2Fa.example%2F&apikey=super-secret-bing-key-9f3a";
+    expect(redactUrl(raw)).toBe(
+      "https://ssl.bing.com/webmaster/api.svc/json/GetUserSites?siteUrl=https%3A%2F%2Fa.example%2F&apikey=[REDACTED]"
+    );
+    expect(redactUrl("https://ssl.bing.com/x?APIKEY=abc&b=1")).toBe(
+      "https://ssl.bing.com/x?APIKEY=[REDACTED]&b=1"
+    );
+    expect(redactUrl("no key here")).toBe("no key here");
+  });
+
+  it("redacts a fragment and every apikey parameter", () => {
+    expect(redactUrl("https://ssl.bing.com/x?apikey=one&foo=1&apikey=two")).toBe(
+      "https://ssl.bing.com/x?apikey=[REDACTED]&foo=1&apikey=[REDACTED]"
+    );
+    expect(redactUrl("https://ssl.bing.com/x?apikey=one#section")).toBe(
+      "https://ssl.bing.com/x?apikey=[REDACTED]#section"
+    );
+    expect(redactUrl("https://ssl.bing.com/x#apikey=one")).toBe(
+      "https://ssl.bing.com/x#apikey=[REDACTED]"
+    );
+    expect(redactUrl("https://ssl.bing.com/x?apikey=one#apikey=two")).toBe(
+      "https://ssl.bing.com/x?apikey=[REDACTED]#apikey=[REDACTED]"
+    );
+  });
+
+  it("redacts the literal key and its encoded forms", () => {
+    const key = "secret/key 9f3a";
+    const encoded = encodeURIComponent(key);
+    const queried = new URLSearchParams({ apikey: key }).toString().slice("apikey=".length);
+    expect(redactUrl(`body ${key} and ${encoded} and ${queried} #apikey=${key}`, key)).toBe(
+      "body [REDACTED] and [REDACTED] and [REDACTED] #apikey=[REDACTED]"
+    );
+    expect(redactUrl(`https://ssl.bing.com/x?apikey=someone-else&note=${key}`, key)).toBe(
+      "https://ssl.bing.com/x?apikey=[REDACTED]&note=[REDACTED]"
+    );
+  });
+});
+
+describe("redactCause", () => {
+  it("stringifies a non-error cause and redacts the key", () => {
+    const key = "secret/key 9f3a";
+    const error = new Error("boom", {
+      cause: { note: key, encoded: encodeURIComponent(key) },
+    });
+    const redacted = redactError(error, key);
+    expect(typeof redacted.cause).toBe("string");
+    const cause = String(redacted.cause);
+    expect(cause).not.toContain(key);
+    expect(cause).not.toContain(encodeURIComponent(key));
+    expect(cause).toContain("[REDACTED]");
+  });
+
+  it("redacts a key that JSON escapes inside a cause", () => {
+    const key = 'se"cret/key';
+    const redacted = redactError(new Error("boom", { cause: { note: key } }), key);
+    expect(redacted.cause).toBe('{"note":"[REDACTED]"}');
+  });
+
+  it("drops a cause that cannot be stringified", () => {
+    const key = "secret/key 9f3a";
+    const cause: { self?: unknown; key: string } = { key };
+    cause.self = cause;
+    const redacted = redactError(new Error(`boom ${key}`, { cause }), key);
+    expect(redacted.cause).toBeUndefined();
+    expect(redacted.message).not.toContain(key);
+  });
 });
 
 describe("getBingApiKey", () => {
@@ -49,5 +121,202 @@ describe("a counter Bing leaves out of a row", () => {
     expect(day.crawledPages).toBe(0);
     expect(day.inIndex).toBeNull();
     expect(day.code5xx).toBeNull();
+  });
+});
+
+describe("a network failure", () => {
+  it("does not keep the API key in the error message or stack", async () => {
+    const key = "super-secret-bing-key-9f3a";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const requested = String(input);
+        const cause = new Error(`connect ECONNREFUSED ${requested}`);
+        cause.stack = `Error: connect ECONNREFUSED ${requested}\n    at connect (${requested})`;
+        const error = new TypeError(`fetch failed ${requested}`, { cause });
+        error.stack = `TypeError: fetch failed ${requested}\n    at fetch (${requested}:1:1)`;
+        throw error;
+      })
+    );
+
+    let caught: unknown;
+    try {
+      await fetchBingTraffic(key, "https://a.example/");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) return;
+    expect(caught.message).not.toContain(key);
+    expect(caught.stack).not.toContain(key);
+    expect(caught.message).toContain("apikey=[REDACTED]");
+    expect(caught.cause).toBeInstanceOf(Error);
+    if (!(caught.cause instanceof Error)) return;
+    expect(caught.cause.message).not.toContain(key);
+    expect(caught.cause.stack).not.toContain(key);
+  });
+
+  it("redacts a nested cause.cause", async () => {
+    const key = "secret/key 9f3a";
+    const encoded = encodeURIComponent(key);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const requested = String(input);
+        const inner = new Error(`inner ${key} ${encoded} ${requested}`);
+        inner.stack = `Error: inner ${key} ${encoded}\n    at inner (${requested})`;
+        const mid = new Error(`mid ${key} ${encoded}`, { cause: inner });
+        mid.stack = `Error: mid ${key} ${encoded}`;
+        const error = new TypeError(`fetch failed ${requested}`, { cause: mid });
+        error.stack = `TypeError: fetch failed ${requested}`;
+        throw error;
+      })
+    );
+
+    let caught: unknown;
+    try {
+      await fetchBingTraffic(key, "https://a.example/");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) return;
+    expect(caught.message).not.toContain(key);
+    expect(caught.message).not.toContain(encoded);
+    const mid = caught.cause;
+    expect(mid).toBeInstanceOf(Error);
+    if (!(mid instanceof Error)) return;
+    expect(mid.message).not.toContain(key);
+    expect(mid.stack).not.toContain(encoded);
+    const inner = mid.cause;
+    expect(inner).toBeInstanceOf(Error);
+    if (!(inner instanceof Error)) return;
+    expect(inner.message).not.toContain(key);
+    expect(inner.message).not.toContain(encoded);
+    expect(inner.stack).not.toContain(key);
+    expect(inner.stack).not.toContain(encoded);
+    expect(inner.message).toContain("apikey=[REDACTED]");
+  });
+
+  it("redacts an AggregateError and a non-error entry", async () => {
+    const key = "secret/key 9f3a";
+    const encoded = encodeURIComponent(key);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const child = new Error(`child ${key} ${encoded}`);
+        child.stack = `Error: child ${key}\n    at child (${encoded})`;
+        const mid = new Error(`mid ${key}`, { cause: child });
+        mid.stack = `Error: mid ${encoded}`;
+        const aggregate = new AggregateError(
+          [mid, { note: key, encoded }],
+          `aggregate ${key} ${encoded}`
+        );
+        aggregate.stack = `AggregateError: aggregate ${key}\n    at fetch (${encoded})`;
+        throw aggregate;
+      })
+    );
+
+    let caught: unknown;
+    try {
+      await fetchBingTraffic(key, "https://a.example/");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    if (!(caught instanceof AggregateError)) return;
+    expect(caught.message).not.toContain(key);
+    expect(caught.message).not.toContain(encoded);
+    expect(caught.stack).not.toContain(key);
+    expect(caught.stack).not.toContain(encoded);
+    const mid = caught.errors[0];
+    expect(mid).toBeInstanceOf(Error);
+    if (!(mid instanceof Error)) return;
+    expect(mid.message).not.toContain(key);
+    expect(mid.stack).not.toContain(encoded);
+    const child = mid.cause;
+    expect(child).toBeInstanceOf(Error);
+    if (!(child instanceof Error)) return;
+    expect(child.message).not.toContain(key);
+    expect(child.stack).not.toContain(encoded);
+    expect(typeof caught.errors[1]).toBe("string");
+    expect(String(caught.errors[1])).not.toContain(key);
+    expect(String(caught.errors[1])).not.toContain(encoded);
+  });
+});
+
+describe("a Bing error response", () => {
+  it("strips the key from a non-OK JSON body", async () => {
+    const key = "secret/key 9f3a";
+    const encoded = encodeURIComponent(key);
+    const queried = new URLSearchParams({ apikey: key }).toString().slice("apikey=".length);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ErrorCode: 3,
+              Message: `rejected ${key} and ${encoded} and ${queried}`,
+            }),
+            { status: 401 }
+          )
+      )
+    );
+
+    let caught: unknown;
+    try {
+      await fetchBingTraffic(key, "https://a.example/");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) return;
+    expect(caught.message).not.toContain(key);
+    expect(caught.message).not.toContain(encoded);
+    expect(caught.message).not.toContain(queried);
+    expect(caught.stack).not.toContain(key);
+    expect(caught.stack).not.toContain(encoded);
+    expect(caught.stack).not.toContain(queried);
+    expect(caught.message).toContain("[REDACTED]");
+  });
+
+  it("strips the key from a non-OK plain body", async () => {
+    const key = "secret/key 9f3a";
+    const encoded = encodeURIComponent(key);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(`plain ${key} ${encoded}`, { status: 500 }))
+    );
+
+    let caught: unknown;
+    try {
+      await fetchBingTraffic(key, "https://a.example/");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) return;
+    expect(caught.message).not.toContain(key);
+    expect(caught.message).not.toContain(encoded);
+    expect(caught.stack).not.toContain(key);
+    expect(caught.stack).not.toContain(encoded);
+  });
+});
+
+describe("testBingKey", () => {
+  it("returns false when the request fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("secret/key 9f3a");
+      })
+    );
+    expect(await testBingKey("secret/key 9f3a")).toBe(false);
   });
 });
