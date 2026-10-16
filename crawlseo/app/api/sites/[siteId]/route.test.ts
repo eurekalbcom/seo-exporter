@@ -164,6 +164,22 @@ describe("PUT /api/sites/[siteId] domain", () => {
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(row.bingSite).toBe("https://old.example/");
   });
+
+  it("returns a generic 500 and logs the exception instead of its message", async () => {
+    db.site.update.mockRejectedValueOnce(new Error("secret-db-token-should-not-leak"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await put({ domain: "new-site.com" });
+      const body = await res.json();
+
+      expect(res.status).toBe(500);
+      expect(body).toEqual({ error: "Failed to update site" });
+      expect(JSON.stringify(body)).not.toContain("secret-db-token-should-not-leak");
+      expect(errorSpy.mock.calls.flat().join(" ")).toContain("secret-db-token-should-not-leak");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 describe("PUT /api/sites/[siteId] with a Bing property", () => {

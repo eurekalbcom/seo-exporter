@@ -52,7 +52,7 @@ export async function POST(req: Request) {
     console.error("Bing sync error:", error);
 
     return Response.json(
-      { error: error instanceof Error ? error.message : "Bing sync failed" },
+      { error: "Bing sync failed" },
       { status: 500 }
     );
   }

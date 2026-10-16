@@ -67,7 +67,7 @@ export async function GET(
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to fetch site",
+        error: "Failed to fetch site",
       },
       { status: 500 }
     );
@@ -208,7 +208,7 @@ export async function PUT(
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to update site",
+        error: "Failed to update site",
       },
       { status: 500 }
     );
@@ -249,7 +249,7 @@ export async function DELETE(
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to delete site",
+        error: "Failed to delete site",
       },
       { status: 500 }
     );

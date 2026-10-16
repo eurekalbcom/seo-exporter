@@ -75,6 +75,24 @@ describe("domains", () => {
     expect(() =>
       assertCrawlDomainAllowed("https://evil.com/?x=allowed.pl", { CRAWL_ALLOWED_DOMAINS: "allowed.pl" })
     ).toThrow(CrawlDomainDeniedError);
+    expect(() =>
+      assertCrawlDomainAllowed("evil.com#@allowed.pl", { CRAWL_ALLOWED_DOMAINS: "allowed.pl" })
+    ).toThrow(CrawlDomainDeniedError);
+    expect(() =>
+      assertCrawlDomainAllowed("evileurekalb.com", { CRAWL_ALLOWED_DOMAINS: "eurekalb.com" })
+    ).toThrow(CrawlDomainDeniedError);
+    expect(() =>
+      assertCrawlDomainAllowed("https://eurekalb.com:443", { CRAWL_ALLOWED_DOMAINS: "eurekalb.com" })
+    ).not.toThrow();
+    expect(() =>
+      assertCrawlDomainAllowed("https://93.184.216.34", { CRAWL_ALLOWED_DOMAINS: "184.216.34" })
+    ).toThrow(CrawlDomainDeniedError);
+    expect(() =>
+      assertCrawlDomainAllowed("https://93.184.216.34:443", { CRAWL_ALLOWED_DOMAINS: "93.184.216.34" })
+    ).not.toThrow();
+    expect(() =>
+      assertCrawlDomainAllowed("https://еurekalb.com", { CRAWL_ALLOWED_DOMAINS: "eurekalb.com" })
+    ).toThrow(CrawlDomainDeniedError);
   });
 });
 

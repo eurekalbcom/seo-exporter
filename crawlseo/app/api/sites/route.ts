@@ -38,7 +38,7 @@ export async function GET() {
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to fetch sites",
+        error: "Failed to fetch sites",
       },
       { status: 500 }
     );
@@ -168,7 +168,7 @@ export async function POST(req: Request) {
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to create site",
+        error: "Failed to create site",
       },
       { status: 500 }
     );
