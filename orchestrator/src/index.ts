@@ -33,27 +33,33 @@ export async function tick(now: Date, deps: OrchestratorDeps): Promise<JobName |
   if (!job) return null;
   const domains = loadScheduledDomains(deps.domainsFile, deps.env);
   for (const domain of domains) {
-    switch (job) {
-      case "gsc-sync":
-      case "crawl":
-      case "vitals":
-        await deps.trigger({ job, domain });
-        break;
-      case "analysis": {
-        const rows = (deps.analyze ?? defaultAnalyze)(domain);
-        await deps.saveRecommendations(rows);
-        await deps.audit({
-          actor: "orchestrator",
-          action: "analysis",
-          domain,
-          details: { recommendations: rows.length, executed: false },
-        });
-        break;
+    try {
+      switch (job) {
+        case "gsc-sync":
+        case "crawl":
+        case "vitals":
+          await deps.trigger({ job, domain });
+          break;
+        case "analysis": {
+          const rows = (deps.analyze ?? defaultAnalyze)(domain);
+          await deps.saveRecommendations(rows);
+          await deps.audit({
+            actor: "orchestrator",
+            action: "analysis",
+            domain,
+            details: { recommendations: rows.length, executed: false },
+          });
+          break;
+        }
+        default: {
+          const _never: never = job;
+          return _never;
+        }
       }
-      default: {
-        const _never: never = job;
-        return _never;
-      }
+    } catch (error) {
+      // One host must not skip the rest of the portfolio, and must not fail
+      // the tick: a retry would run hosts that already succeeded.
+      console.error(`orchestrator ${job} failed for ${domain}:`, error);
     }
   }
   return job;

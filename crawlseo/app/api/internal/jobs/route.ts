@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { assertCrawlDomainAllowed, CrawlDomainDeniedError } from "@/lib/crawl-allowlist";
 import { startSiteCrawl } from "@/lib/crawler/lifecycle";
+import { comparableDomain } from "@/lib/site-domain";
 import { syncGSCDataForSite } from "@/lib/workers/gsc-sync";
 import { syncVitalsForSite } from "@/lib/workers/vitals-sync";
 
@@ -46,10 +47,19 @@ export async function POST(req: Request) {
     throw error;
   }
 
-  const site = await db.site.findFirst({
-    where: { domain: body.domain },
-    select: { id: true, userId: true, domain: true },
-  });
+  // Site.domain keeps a leading www for a URL-prefix property. The scheduler
+  // sends the comparable host. Two accounts for that host are not interchangeable.
+  const host = comparableDomain(body.domain);
+  const sites = host
+    ? await db.site.findMany({
+        where: { domain: { in: [host, `www.${host}`] } },
+        select: { id: true, userId: true, domain: true },
+      })
+    : [];
+  if (sites.length > 1) {
+    return Response.json({ error: "Multiple sites match this domain" }, { status: 409 });
+  }
+  const site = sites[0];
   if (!site) {
     return Response.json({ error: "Site not found" }, { status: 404 });
   }

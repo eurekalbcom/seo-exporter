@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { assertCrawlDomainAllowed, CrawlDomainDeniedError } from "../src/allowlist";
 import { triggerJob } from "../src/client";
@@ -144,6 +144,29 @@ describe("adapter", () => {
     });
     expect(morning).toBe("gsc-sync");
     expect(triggered).toEqual(["gsc-sync:bezkolejki.org", "gsc-sync:eurekalb.com"]);
+  });
+
+  it("runs later domains when an earlier one fails", async () => {
+    const triggered: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const job = await tick(new Date("2026-01-15T02:00:00.000Z"), {
+      domainsFile: join(ROOT, "config/domains.yml"),
+      env: {},
+      trigger: async ({ domain }) => {
+        triggered.push(domain);
+        if (domain === "bezkolejki.org") throw new Error("adapter 404");
+      },
+      saveRecommendations: async () => {
+        throw new Error("gsc-sync must not write recommendations");
+      },
+      audit: async () => {
+        throw new Error("gsc-sync must not pretend to execute");
+      },
+    });
+    expect(job).toBe("gsc-sync");
+    expect(triggered).toEqual(["bezkolejki.org", "eurekalb.com"]);
+    expect(spy).toHaveBeenCalledOnce();
+    spy.mockRestore();
   });
 });
 

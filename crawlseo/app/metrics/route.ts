@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
+import { visibleIssueFilter } from "@/lib/crawler/issue-filter";
 import { renderPrometheus, type MetricSample } from "@/lib/metrics";
 
 type CountRow = { domain: string; value: number };
-type IssueRow = { domain: string; severity: string; value: number };
 type VitalRow = { domain: string; lcp: number | null; inp: number | null; cls: number | null; ttfb: number | null };
 type RecommendationRow = { domain: string; status: string; category: string; value: number };
 
@@ -12,14 +12,21 @@ function num(value: number | bigint | null): number {
 }
 
 async function searchSamples(): Promise<MetricSample[]> {
+  // Page rows are the site total. Keyword rows omit anonymised queries, and a
+  // raw average of per-row positions is not the impression-weighted position.
   const rows = await db.$queryRaw<CountRow[]>`
     SELECT s.domain AS domain,
-           COALESCE(SUM(k.clicks), 0)::float AS clicks,
-           COALESCE(SUM(k.impressions), 0)::float AS impressions,
-           COALESCE(AVG(k.position), 0)::float AS position
+           COALESCE(SUM(p.clicks), 0)::float AS clicks,
+           COALESCE(SUM(p.impressions), 0)::float AS impressions,
+           CASE
+             WHEN COALESCE(SUM(GREATEST(p.impressions, 0)), 0) = 0
+               THEN COALESCE(AVG(p.position), 0)
+             ELSE SUM(p.position * GREATEST(p.impressions, 0)::float)
+                  / SUM(GREATEST(p.impressions, 0))::float
+           END::float AS position
     FROM "Site" s
-    LEFT JOIN "Keyword" k ON k."siteId" = s.id
-      AND k.date >= NOW() - INTERVAL '28 days'
+    LEFT JOIN "Page" p ON p."siteId" = s.id
+      AND p.date >= NOW() - INTERVAL '28 days'
     GROUP BY s.domain
   `;
   const samples: MetricSample[] = [];
@@ -35,18 +42,46 @@ async function searchSamples(): Promise<MetricSample[]> {
 }
 
 async function issueSamples(): Promise<MetricSample[]> {
-  const rows = await db.$queryRaw<IssueRow[]>`
-    SELECT s.domain AS domain, i.severity::text AS severity, COUNT(*)::float AS value
-    FROM "CrawlIssue" i
-    JOIN "Crawl" c ON c.id = i."crawlId"
+  // The crawl screens count visible issues on the latest completed crawl only.
+  const latest = await db.$queryRaw<{ id: string; domain: string }[]>`
+    SELECT DISTINCT ON (c."siteId") c.id AS id, s.domain AS domain
+    FROM "Crawl" c
     JOIN "Site" s ON s.id = c."siteId"
-    GROUP BY s.domain, i.severity
+    WHERE c.status::text = 'COMPLETED'
+    ORDER BY c."siteId", c."finishedAt" DESC
   `;
-  return rows.map((row) => ({
-    name: "seo_crawl_issues" as const,
-    labels: { domain: row.domain, severity: row.severity, category: "crawl" },
-    value: num(row.value),
-  }));
+  if (latest.length === 0) return [];
+
+  const domainByCrawl = new Map(latest.map((row) => [row.id, row.domain]));
+  const groups = await db.crawlIssue.groupBy({
+    by: ["crawlId", "severity"],
+    where: {
+      crawlId: { in: latest.map((row) => row.id) },
+      ...visibleIssueFilter(),
+    },
+    _count: { _all: true },
+  });
+
+  const totals = new Map<string, Map<string, number>>();
+  for (const group of groups) {
+    const domain = domainByCrawl.get(group.crawlId);
+    if (!domain) continue;
+    const bySeverity = totals.get(domain) ?? new Map<string, number>();
+    bySeverity.set(group.severity, (bySeverity.get(group.severity) ?? 0) + group._count._all);
+    totals.set(domain, bySeverity);
+  }
+
+  const samples: MetricSample[] = [];
+  for (const [domain, bySeverity] of totals) {
+    for (const [severity, value] of bySeverity) {
+      samples.push({
+        name: "seo_crawl_issues",
+        labels: { domain, severity, category: "crawl" },
+        value,
+      });
+    }
+  }
+  return samples;
 }
 
 async function vitalSamples(): Promise<MetricSample[]> {
