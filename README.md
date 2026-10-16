@@ -63,6 +63,8 @@ This repository is the home for the read-only SEO Autopilot MVP. CrawlSEO is ven
 | `CRAWLSEO_HIDE_CLOUD_PROMO` | hidden | Set to `false` to show the crawlseo.cloud card |
 | `POSTGRES_PASSWORD` | unset | Compose fails if this is missing |
 | `ORCHESTRATOR_TOKEN` | unset | `/api/internal/jobs` stays 404 |
+| `METRICS_TOKEN` | unset | `GET /metrics` stays 401 |
+| `AUTH_TRUST_HOST` | unset | Trust `X-Forwarded-Host` only when exactly `true` |
 
 Secrets stay in the environment. Do not commit `.env` files or keys.
 
@@ -85,4 +87,4 @@ npm ci
 npm test
 ```
 
-MCP is stdio only: `npm run mcp` inside `crawlseo/`. Postgres is on the compose internal network and has no published port.
+MCP is stdio only: `npm run mcp` inside `crawlseo/`. Postgres is on the compose internal network and has no published port. The app port is `127.0.0.1:3000`.

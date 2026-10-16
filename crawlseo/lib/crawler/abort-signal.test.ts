@@ -7,6 +7,9 @@ vi.mock("dns/promises", () => ({
 vi.mock("@/lib/db", () => ({ db: {} }));
 
 import { fetchText } from "./engine";
+import { allowCrawlerTestDomains } from "./test-allowlist";
+
+allowCrawlerTestDomains();
 
 // The optional abort signal of fetchPublic (HopHooks.signal), seen through
 // fetchText. The site crawl passes no signal.

@@ -3,6 +3,7 @@ import type { LookupAddress } from "dns";
 import { lookup } from "dns/promises";
 import { BlockList, isIPv4, isIPv6, type LookupFunction } from "net";
 import { Agent } from "undici";
+import { assertCrawlDomainAllowed } from "@/lib/crawl-allowlist";
 import { db } from "@/lib/db";
 import type { IssueSeverity, IssueType } from "@prisma/client";
 import { REMEDIATION } from "./remediation";
@@ -618,6 +619,9 @@ async function fetchPublic(
     // is consulted: there is no robots.txt to read for it.
     if (!isHttpUrl(currentUrl)) throw new Error(`Unsupported URL: ${currentUrl}`);
     await assertPublicUrl(currentUrl);
+    // The seed is checked at the API. Every later hop, and this one, is
+    // checked again so a redirect cannot leave CRAWL_ALLOWED_DOMAINS.
+    assertCrawlDomainAllowed(currentUrl);
     await hooks.guard?.(currentUrl);
     outer?.throwIfAborted();
     const release = (await hooks.pace?.(currentUrl)) ?? (() => {});

@@ -31,12 +31,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.CRAWL_ALLOWED_DOMAINS;
   await new Promise((resolve) => server.close(resolve));
 });
 
 beforeEach(() => {
   hits = 0;
   lookup.mockReset();
+  // The suite's URL is localhost. Keep it allowlisted so the crawl allowlist
+  // does not skip the second DNS lookup these tests measure.
+  process.env.CRAWL_ALLOWED_DOMAINS = "localhost";
 });
 
 /** A resolver for lookup(name, { all: true }), the only form the crawler uses. */

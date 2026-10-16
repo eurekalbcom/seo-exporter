@@ -80,5 +80,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: {
     strategy: "database",
   },
+  // Auth.js trusts X-Forwarded-Host only when this is exactly true. The
+  // compose port is bound to 127.0.0.1, so leave AUTH_TRUST_HOST unset unless
+  // a reverse proxy in front of that bind overwrites Host and X-Forwarded-Host.
+  // A client who can reach the app can otherwise choose the OAuth callback host.
+  trustHost: process.env.AUTH_TRUST_HOST?.trim().toLowerCase() === "true",
   secret: process.env.NEXTAUTH_SECRET,
 });

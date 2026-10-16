@@ -50,6 +50,9 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { crawlerDispatcher, fetchText, pinnedLookup, runSiteCrawl } from "./engine";
+import { allowCrawlerTestDomains } from "./test-allowlist";
+
+allowCrawlerTestDomains();
 
 /* ------------------------------------------------------------------ */
 /*  A fake web: URL -> response                                        */

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { assertCrawlDomainAllowed, CrawlDomainDeniedError } from "@/lib/crawl-allowlist";
+import { bearerMatches } from "@/lib/secret-compare";
 import { startSiteCrawl } from "@/lib/crawler/lifecycle";
 import { syncGSCDataForSite } from "@/lib/workers/gsc-sync";
 import { syncVitalsForSite } from "@/lib/workers/vitals-sync";
@@ -12,9 +13,7 @@ function isJob(value: unknown): value is JobName {
 }
 
 function authorized(req: Request): boolean {
-  const token = process.env.ORCHESTRATOR_TOKEN;
-  if (!token) return false;
-  return req.headers.get("authorization") === `Bearer ${token}`;
+  return bearerMatches(req.headers.get("authorization"), process.env.ORCHESTRATOR_TOKEN);
 }
 
 /**

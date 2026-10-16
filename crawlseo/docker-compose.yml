@@ -5,8 +5,9 @@ services:
       dockerfile: Dockerfile
     image: seo-autopilot-crawlseo:readonly
     restart: always
+    # Loopback only. Do not publish the app on every interface.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     env_file:
       - path: .env
         required: false
