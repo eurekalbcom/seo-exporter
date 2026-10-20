@@ -17,7 +17,7 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous title and meta description. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "query": "kolejka wizyta",
   "clicks": 2,
@@ -25,7 +25,7 @@ This tool does not change the site or Search Console.
   "ctr": 0.005,
   "position": 8.2
 }
-```
+````
 
 ## rec_3ee20a3be806
 
@@ -36,7 +36,7 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous title and meta description. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "page": "https://eurekalb.com/",
   "clicks": 3,
@@ -44,7 +44,7 @@ This tool does not change the site or Search Console.
   "ctr": 0.006,
   "position": 9
 }
-```
+````
 
 ## rec_50dbe95dd2af
 
@@ -55,12 +55,12 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous heading. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/about",
   "h1": []
 }
-```
+````
 
 ## rec_663bcedb74cd
 
@@ -71,7 +71,7 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous headings. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/guides",
   "h1": [
@@ -79,7 +79,7 @@ This tool does not change the site or Search Console.
     "Second guide"
   ]
 }
-```
+````
 
 ## rec_838144185c71
 
@@ -90,13 +90,13 @@ This tool does not change the site or Search Console.
 - rollback: Restore the HTTP 301 redirect from https://eurekalb.com/old to https://eurekalb.com/about. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "from": "https://eurekalb.com/old",
   "to": "https://eurekalb.com/about",
   "status": 301
 }
-```
+````
 
 ## rec_930ec698bbf4
 
@@ -107,12 +107,12 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous title element. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/blank",
   "title": null
 }
-```
+````
 
 ## rec_94120c6aa582
 
@@ -123,12 +123,12 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous sitemap entry and the previous response. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/ghost",
   "status": 404
 }
-```
+````
 
 ## rec_9a245927f248
 
@@ -139,12 +139,12 @@ This tool does not change the site or Search Console.
 - rollback: Remove the new canonical or restore the previous one. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/about",
   "canonical": null
 }
-```
+````
 
 ## rec_e04567e45c66
 
@@ -155,12 +155,12 @@ This tool does not change the site or Search Console.
 - rollback: Restore the previous meta description. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/about",
   "metaDescription": null
 }
-```
+````
 
 ## rec_f2f2e8208c42
 
@@ -171,13 +171,13 @@ This tool does not change the site or Search Console.
 - rollback: Point the link back at https://eurekalb.com/missing. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "from": "https://eurekalb.com/",
   "to": "https://eurekalb.com/missing",
   "status": 404
 }
-```
+````
 
 ## rec_fa39d0eff330
 
@@ -188,9 +188,9 @@ This tool does not change the site or Search Console.
 - rollback: Put the noindex robots directive back. No change has been applied.
 - dane:
 
-```json
+````json
 {
   "url": "https://eurekalb.com/noindex",
   "noindex": true
 }
-```
+````

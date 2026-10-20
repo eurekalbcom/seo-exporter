@@ -44,6 +44,12 @@ export function withDecisions(report: AutopilotReport, decisions: Decision[]): A
   };
 }
 
+function jsonFence(body: string): string {
+  let marker = "````";
+  while (body.includes(marker)) marker += "`";
+  return `${marker}json\n${body}\n${marker}`;
+}
+
 export function renderMarkdown(report: AutopilotReport): string {
   const lines = [
     "# SEO Autopilot report",
@@ -64,7 +70,7 @@ export function renderMarkdown(report: AutopilotReport): string {
     lines.push(`- uzasadnienie: ${item.uzasadnienie}`);
     lines.push(`- ryzyko: ${item.ryzyko}`);
     lines.push(`- rollback: ${item.rollback}`);
-    lines.push("- dane:", "", "```json", JSON.stringify(item.dane, null, 2), "```", "");
+    lines.push("- dane:", "", jsonFence(JSON.stringify(item.dane, null, 2)), "");
   }
   return lines.join("\n");
 }

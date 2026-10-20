@@ -1,15 +1,20 @@
-import { assertCrawlDomainAllowed } from "../allowlist";
+import { assertCrawlDomainAllowed, assertLiveFetchOrigin, LIVE_ORIGINS } from "../allowlist";
 import { extractHtml } from "./html-page";
 import { parseRobots, robotsAllows, robotsCrawlDelay } from "./robots";
-import { safeRequest, USER_AGENT, type FetchLike } from "./safe-http";
+import { REQUEST_TIMEOUT_MS, safeRequest, USER_AGENT, type FetchLike } from "./safe-http";
 
-export { USER_AGENT };
+export { USER_AGENT, LIVE_ORIGINS };
 export type { FetchLike };
 
-export const LIVE_ORIGINS = ["https://bezkolejki.org", "https://eurekalb.com"] as const;
 export const MAX_CRAWL_DELAY_S = 60;
+export const MAX_BODY = 1_000_000;
 
-const MAX_BODY = 1_000_000;
+export class ResponseTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResponseTooLargeError";
+  }
+}
 const MAX_SITEMAPS = 5;
 const MAX_SITEMAP_URLS = 200;
 
@@ -63,6 +68,7 @@ export type CrawlOptions = {
   maxPages?: number;
   maxLinkChecks?: number;
   maxRedirects?: number;
+  timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -87,9 +93,39 @@ export function normalizeUrl(value: string, base?: string): string {
   return url.toString();
 }
 
-async function readCapped(res: Response): Promise<string> {
-  const buf = Buffer.from(await res.arrayBuffer());
-  return buf.subarray(0, MAX_BODY).toString("utf8");
+async function readCapped(res: Response, abort: () => void): Promise<string> {
+  const declared = res.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (!Number.isFinite(length) || length < 0 || length > MAX_BODY) {
+      abort();
+      await res.body?.cancel().catch(() => undefined);
+      throw new ResponseTooLargeError(`Content-Length ${declared} exceeds ${MAX_BODY}`);
+    }
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      if (total + value.byteLength > MAX_BODY) {
+        abort();
+        await reader.cancel().catch(() => undefined);
+        throw new ResponseTooLargeError(`Response body exceeds ${MAX_BODY} bytes`);
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } catch (err) {
+    abort();
+    await reader.cancel().catch(() => undefined);
+    throw err;
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export async function crawlOrigins(options: CrawlOptions): Promise<OriginCrawl[]> {
@@ -103,6 +139,9 @@ export async function crawlOrigins(options: CrawlOptions): Promise<OriginCrawl[]
 async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<OriginCrawl> {
   const origin = new URL(originInput).origin;
   assertCrawlDomainAllowed(origin, options.env);
+  assertLiveFetchOrigin(origin);
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let abortCurrent = () => {};
   const minDelayMs = options.minDelayMs ?? 1000;
   const maxPages = options.maxPages ?? 30;
   const maxLinkChecks = options.maxLinkChecks ?? 40;
@@ -133,12 +172,19 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
 
   async function get(url: string): Promise<Response> {
     const target = normalizeUrl(url);
-    if (!sameSite(origin, target)) throw new Error(`Refusing off-site fetch ${target}`);
     assertCrawlDomainAllowed(target, options.env);
+    assertLiveFetchOrigin(target);
+    if (!sameSite(origin, target)) throw new Error(`Refusing off-site fetch ${target}`);
     await pace();
-    const response = await safeRequest(options.fetchImpl, target, { method: "GET" });
+    const controller = new AbortController();
+    abortCurrent = () => controller.abort();
+    const response = await safeRequest(options.fetchImpl, target, { method: "GET", signal: controller.signal }, timeoutMs);
     requests.push({ url: target, method: "GET", status: response.status });
     return response;
+  }
+
+  async function bodyOf(res: Response): Promise<string> {
+    return readCapped(res, abortCurrent);
   }
 
   let robotsText = "";
@@ -146,14 +192,14 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
   report.robotsStatus = robotsRes.status;
   if (robotsRes.status === 429 || robotsRes.status >= 500) {
     report.robotsOutcome = "unreachable";
-    await readCapped(robotsRes);
+    await bodyOf(robotsRes);
     return report;
   }
   if (robotsRes.status >= 400) {
     report.robotsOutcome = "missing";
-    await readCapped(robotsRes);
+    await bodyOf(robotsRes);
   } else {
-    robotsText = await readCapped(robotsRes);
+    robotsText = await bodyOf(robotsRes);
     report.robotsOutcome = "rules";
   }
 
@@ -195,10 +241,10 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
     }
     const res = await get(sitemapUrl);
     if (res.status < 200 || res.status >= 300) {
-      await readCapped(res);
+      await bodyOf(res);
       continue;
     }
-    const xml = await readCapped(res);
+    const xml = await bodyOf(res);
     const locs = [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map((match) =>
       (match[1] ?? "").replace(/&amp;/g, "&").trim()
     );
@@ -242,11 +288,11 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
         try {
           next = normalizeUrl(location, current);
         } catch {
-          await readCapped(res);
+          await bodyOf(res);
           return null;
         }
         report.redirects.push({ from: current, to: next, status: res.status });
-        await readCapped(res);
+        await bodyOf(res);
         if (!sameSite(origin, next)) return null;
         current = next;
         continue;
@@ -255,7 +301,7 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
         finalUrl: current,
         status: res.status,
         contentType: res.headers.get("content-type") ?? "",
-        body: await readCapped(res),
+        body: await bodyOf(res),
         xRobots: res.headers.get("x-robots-tag"),
       };
     }

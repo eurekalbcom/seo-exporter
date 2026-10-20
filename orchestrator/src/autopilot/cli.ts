@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendDecision, readDecisions } from "./approval";
 import { crawlOrigins, hostOf, LIVE_ORIGINS, type FetchLike } from "./crawl";
+import { REQUEST_TIMEOUT_MS } from "./safe-http";
 import { loadFixtureSite } from "./fixture-site";
 import { parseGscPages, parseGscQueries } from "./gsc-csv";
 import { recommend } from "./recommend";
@@ -15,6 +16,7 @@ export type CliIo = {
   fetchImpl?: FetchLike;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
 };
 
 type Command = "report" | "approve" | "reject" | "help";
@@ -110,6 +112,7 @@ async function buildReport(flags: Map<string, string>, io: CliIo): Promise<numbe
     env,
     minDelayMs,
     sleep: io.sleep,
+    timeoutMs: io.timeoutMs ?? REQUEST_TIMEOUT_MS,
   });
   const report = {
     generatedAt: (io.now ?? (() => new Date()))().toISOString(),

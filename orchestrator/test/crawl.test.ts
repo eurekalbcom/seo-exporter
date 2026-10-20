@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CrawlDomainDeniedError } from "../src/allowlist";
-import { crawlOrigins, LIVE_ORIGINS, normalizeUrl } from "../src/autopilot/crawl";
+import { CrawlDomainDeniedError, LiveOriginDeniedError } from "../src/allowlist";
+import { crawlOrigins, LIVE_ORIGINS, MAX_BODY, normalizeUrl, ResponseTooLargeError } from "../src/autopilot/crawl";
 import { loadFixtureSite } from "../src/autopilot/fixture-site";
 import { extractHtml } from "../src/autopilot/html-page";
 import { parseRobots, robotsAllows, robotsCrawlDelay } from "../src/autopilot/robots";
@@ -55,8 +55,9 @@ describe("robots", () => {
   });
 
   it("keeps the group across a comment and still splits on a blank line", () => {
-    const commented = parseRobots("User-agent: *\n# keep this group\nDisallow: /private\n");
-    expect(robotsAllows(commented, "https://eurekalb.com/private", USER_AGENT)).toBe(false);
+    const commented = parseRobots("User-agent: *\n# x\nDisallow: /x\n");
+    expect(robotsAllows(commented, "https://eurekalb.com/x", USER_AGENT)).toBe(false);
+    expect(robotsAllows(commented, "https://eurekalb.com/ok", USER_AGENT)).toBe(true);
     const split = parseRobots("User-agent: *\nDisallow: /private\n\nAllow: /private\n");
     expect(robotsAllows(split, "https://eurekalb.com/private", USER_AGENT)).toBe(false);
   });
@@ -221,5 +222,105 @@ describe("polite crawl", () => {
     expect(report?.pages.some((page) => page.url === "https://eurekalb.com/next")).toBe(true);
     expect(fetched).toContain("https://eurekalb.com/jump");
     expect(report?.pages.some((page) => page.url === "https://eurekalb.com/jump")).toBe(false);
+  });
+
+  it("rejects a declared or streamed body over the cap and does not return pages", async () => {
+    await expect(
+      crawlOrigins({
+        origins: ["https://eurekalb.com"],
+        env: ENV,
+        minDelayMs: 0,
+        sleep: async () => undefined,
+        fetchImpl: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull() {
+                throw new Error("body was read");
+              },
+            }),
+            { status: 200, headers: { "content-type": "text/plain", "content-length": String(MAX_BODY + 1) } }
+          ),
+      })
+    ).rejects.toThrow(`Content-Length ${MAX_BODY + 1} exceeds ${MAX_BODY}`);
+    let pulled = 0;
+
+    await expect(
+      crawlOrigins({
+        origins: ["https://eurekalb.com"],
+        env: ENV,
+        minDelayMs: 0,
+        sleep: async () => undefined,
+        fetchImpl: async () => {
+          const stream = new ReadableStream<Uint8Array>({
+            pull(controller) {
+              const size = 64 * 1024;
+              pulled += size;
+              if (pulled > MAX_BODY + size * 4) {
+                controller.error(new Error("stream was not aborted"));
+                return;
+              }
+              controller.enqueue(new Uint8Array(size));
+            },
+          });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/html" } });
+        },
+      })
+    ).rejects.toBeInstanceOf(ResponseTooLargeError);
+    expect(pulled).toBeLessThan(MAX_BODY + 64 * 1024 * 2);
+  });
+
+  it("fails the run on timeout and does not keep a page", async () => {
+    const fetched: string[] = [];
+    await expect(
+      crawlOrigins({
+        origins: ["https://eurekalb.com"],
+        env: ENV,
+        minDelayMs: 0,
+        timeoutMs: 30,
+        sleep: async () => undefined,
+        fetchImpl: (url, init) => {
+          fetched.push(url);
+          return new Promise((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("missing abort signal"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason));
+          });
+        },
+      })
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(fetched).toEqual(["https://eurekalb.com/robots.txt"]);
+  });
+
+  it("does not fetch a redirect to http or to a non-default port", async () => {
+    const cases = ["http://eurekalb.com/insecure", "https://eurekalb.com:8443/other"];
+    for (const target of cases) {
+      const fetched: string[] = [];
+      await expect(
+        crawlOrigins({
+          origins: ["https://eurekalb.com"],
+          env: ENV,
+          minDelayMs: 0,
+          sleep: async () => undefined,
+          fetchImpl: async (url) => {
+            fetched.push(url);
+            const path = new URL(url).pathname;
+            if (path === "/robots.txt") return new Response("User-agent: *\nDisallow:\n", { status: 200 });
+            if (path === "/sitemap.xml") return new Response("missing", { status: 404 });
+            if (path === "/") {
+              return new Response(null, { status: 302, headers: { location: target } });
+            }
+            return new Response("<html><title>No</title></html>", {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            });
+          },
+        })
+      ).rejects.toBeInstanceOf(LiveOriginDeniedError);
+      expect(fetched).not.toContain(target);
+      expect(fetched.every((url) => new URL(url).origin === "https://eurekalb.com")).toBe(true);
+    }
   });
 });
