@@ -1,4 +1,5 @@
 import { hostOf, type OriginCrawl } from "./crawl";
+import { escapeMarkdownInline } from "./markdown-text";
 import type { GscPageRow, GscQueryRow } from "./gsc-csv";
 import { recommendationId } from "./recommendation-id";
 import type { RecommendInput, Recommendation } from "./recommend";
@@ -28,7 +29,7 @@ export type GscThresholdOverrides = {
 };
 
 const UNAPPLIED = "No change has been applied.";
-const STOP = new Set(["bez", "nfz", "pl", "www", "http", "https", "html", "oraz", "albo"]);
+const STOP = new Set(["bez", "pl", "www", "http", "https", "html", "oraz", "albo"]);
 
 export function resolveGscThresholds(overrides?: GscThresholdOverrides): GscThresholds {
   return {
@@ -168,7 +169,7 @@ export function strikingDistanceQueries(input: RecommendInput, thresholds: GscTh
     const page = bestPage(row.query, pages);
     const where = page ? ` on ${page.url}` : "";
     return propose(input.domain, "striking-distance-query", row.query, {
-      opis: `Suggest a title, h1, and on-page section for "${row.query}"${where}.`,
+      opis: `Suggest a title, h1, and on-page section for "${escapeMarkdownInline(row.query)}"${where}.`,
       uzasadnienie: `The query is at position ${row.position} with ${row.impressions} impressions, inside the striking-distance band.`,
       dane: {
         query: row.query,
@@ -201,7 +202,7 @@ export function ctrBelowExpectedQueries(input: RecommendInput, thresholds: GscTh
     if (expected === null) return [];
     return [
       propose(input.domain, "ctr-below-expected-query", row.query, {
-        opis: `Rewrite the title and meta description for the query "${row.query}".`,
+        opis: `Rewrite the title and meta description for the query "${escapeMarkdownInline(row.query)}".`,
         uzasadnienie: `CTR is ${formatPct(row.ctr)} at position ${row.position}. The curve for that position is about ${formatPct(expected)}.`,
         dane: ctrDane(row, expected, thresholds),
         ryzyko: "A snippet that over-promises can earn the click and lose the visitor.",
@@ -275,10 +276,10 @@ export function landingPageClusters(input: RecommendInput, thresholds: GscThresh
     if (impressions < thresholds.landingCluster.minImpressions) return [];
     const clicks = cluster.queries.reduce((sum, row) => sum + row.clicks, 0);
     const listed = [...cluster.queries].sort((left, right) => right.impressions - left.impressions || left.query.localeCompare(right.query));
-    const names = listed.map((row) => `"${row.query}"`).join(", ");
+    const names = listed.map((row) => `"${escapeMarkdownInline(row.query)}"`).join(", ");
     return [
       propose(input.domain, "landing-page-cluster", cluster.key, {
-        opis: `Propose a new landing page for the ${cluster.label} queries: ${names}.`,
+        opis: `Propose a new landing page for the ${escapeMarkdownInline(cluster.label)} queries: ${names}.`,
         uzasadnienie: `The cluster has ${impressions} impressions and no crawled path or h1 that matches it.`,
         dane: {
           cluster: cluster.label,
@@ -306,7 +307,7 @@ function genericStems(frequency: Map<string, number>, total: number, share: numb
   for (const [item, count] of frequency) {
     if (count / total >= share) generic.add(item);
   }
-  // "kolejek" and "kolejki" share a five-letter prefix, so the rarer spelling stays with the head term.
+  // "topica" and "topics" share a five-letter prefix, so the rarer spelling stays with the head term.
   const prefixes = new Set([...generic].map((item) => item.slice(0, 5)));
   for (const item of frequency.keys()) {
     if (prefixes.has(item.slice(0, 5))) generic.add(item);

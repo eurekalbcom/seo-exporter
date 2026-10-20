@@ -11,13 +11,13 @@ const FIXTURE = join(import.meta.dirname, "../fixtures/autopilot");
 function crawl(status = 403, extraPage?: string): OriginCrawl[] {
   const pages: OriginCrawl["pages"] = [
     {
-      url: "https://bezkolejki.org/",
+      url: "https://example.com/",
       status: 200,
       contentType: "text/html",
-      title: "Kolejki NFZ – wolne terminy u lekarza | BezKolejki.org",
-      metaDescription: "Terminy NFZ",
-      canonical: "https://bezkolejki.org/",
-      h1: ["Znajdź najszybszy termin wizyty na NFZ"],
+      title: "Sample Guide | Example",
+      metaDescription: "A sample guide",
+      canonical: "https://example.com/",
+      h1: ["Find a sample item"],
       noindex: false,
       links: [],
       parsedHtml: true,
@@ -31,7 +31,7 @@ function crawl(status = 403, extraPage?: string): OriginCrawl[] {
       title: "Lekarz",
       metaDescription: null,
       canonical: extraPage,
-      h1: ["Lekarz bez kolejki"],
+      h1: ["Widget sample"],
       noindex: false,
       links: [],
       parsedHtml: true,
@@ -39,7 +39,7 @@ function crawl(status = 403, extraPage?: string): OriginCrawl[] {
   }
   return [
     {
-      origin: "https://bezkolejki.org",
+      origin: "https://example.com",
       robotsStatus: 200,
       robotsOutcome: "rules",
       crawlDelaySeconds: null,
@@ -50,9 +50,9 @@ function crawl(status = 403, extraPage?: string): OriginCrawl[] {
       brokenLinks: [],
       skippedOffHost: [],
       requests: [
-        { url: "https://bezkolejki.org/robots.txt", method: "GET", status: 200 },
-        { url: "https://bezkolejki.org/sitemap.xml", method: "GET", status },
-        { url: "https://bezkolejki.org/", method: "GET", status: 200 },
+        { url: "https://example.com/robots.txt", method: "GET", status: 200 },
+        { url: "https://example.com/sitemap.xml", method: "GET", status },
+        { url: "https://example.com/", method: "GET", status: 200 },
       ],
     },
   ];
@@ -60,10 +60,10 @@ function crawl(status = 403, extraPage?: string): OriginCrawl[] {
 
 function rows(options?: { status?: number; extraPage?: string; thresholds?: Parameters<typeof recommend>[0]["thresholds"] }) {
   return recommend({
-    domain: "bezkolejki.org",
+    domain: "example.com",
     crawl: crawl(options?.status ?? 403, options?.extraPage),
-    queries: parseGscQueries(readFileSync(join(FIXTURE, "gsc-bezkolejki-queries.csv"), "utf8")),
-    pages: parseGscPages(readFileSync(join(FIXTURE, "gsc-bezkolejki-pages.csv"), "utf8")),
+    queries: parseGscQueries(readFileSync(join(FIXTURE, "gsc-opportunities-queries.csv"), "utf8")),
+    pages: parseGscPages(readFileSync(join(FIXTURE, "gsc-opportunities-pages.csv"), "utf8")),
     thresholds: options?.thresholds,
   });
 }
@@ -72,11 +72,11 @@ describe("GSC opportunity rules", () => {
   it("reads striking distance, expected CTR, unmatched clusters, and a blocked sitemap from the fixture CSV", () => {
     const found = rows();
     const striking = found.filter((row) => row.rule === "striking-distance-query");
-    expect(striking.map((row) => row.dane.query).sort()).toEqual(["bez kolejki nfz", "bezkolejki nfz", "lekarz bez kolejki"]);
-    expect(striking.find((row) => row.dane.query === "bez kolejki nfz")?.dane).toMatchObject({
-      impressions: 68,
-      position: 8.9,
-      page: "https://bezkolejki.org/",
+    expect(striking.map((row) => row.dane.query).sort()).toEqual(["example topics", "example topics two", "widget topics"]);
+    expect(striking.find((row) => row.dane.query === "example topics")?.dane).toMatchObject({
+      impressions: 120,
+      position: 6.2,
+      page: "https://example.com/",
     });
     for (const row of striking) {
       expect(row.opis).toMatch(/title, h1/);
@@ -84,31 +84,31 @@ describe("GSC opportunity rules", () => {
     }
 
     const ctr = found.filter((row) => row.rule === "ctr-below-expected-query");
-    expect(ctr.map((row) => row.dane.query)).toEqual(["lekarz bez kolejki"]);
-    expect(ctr[0]?.dane).toMatchObject({ ctr: 0, impressions: 23, expectedCtr: expectedCtr(18.3) });
+    expect(ctr.map((row) => row.dane.query)).toEqual(["widget topics"]);
+    expect(ctr[0]?.dane).toMatchObject({ ctr: 0, impressions: 22, expectedCtr: expectedCtr(15.2) });
     expect(found.some((row) => row.rule === "ctr-below-expected-page")).toBe(false);
 
     const clusters = found.filter((row) => row.rule === "landing-page-cluster");
-    expect(clusters.map((row) => row.dane.cluster).sort()).toEqual(["kraków", "lekarz"]);
-    expect(clusters.find((row) => row.dane.cluster === "lekarz")?.dane).toMatchObject({ impressions: 41 });
-    expect(clusters.find((row) => row.dane.cluster === "kraków")?.dane.queries).toEqual([
-      expect.objectContaining({ query: "kolejka nfz kraków", impressions: 1 }),
-      expect.objectContaining({ query: "kolejki nfz kraków", impressions: 1 }),
+    expect(clusters.map((row) => row.dane.cluster).sort()).toEqual(["orange", "widget"]);
+    expect(clusters.find((row) => row.dane.cluster === "widget")?.dane).toMatchObject({ impressions: 40 });
+    expect(clusters.find((row) => row.dane.cluster === "orange")?.dane.queries).toEqual([
+      expect.objectContaining({ query: "orange topics", impressions: 1 }),
+      expect.objectContaining({ query: "oranges topics", impressions: 1 }),
     ]);
     const clustered = clusters.flatMap((row) => (row.dane.queries as Array<{ query: string }>).map((item) => item.query));
-    expect(clustered).not.toContain("bez kolejki nfz");
-    expect(clustered).not.toContain("bezkolejki");
+    expect(clustered).not.toContain("example topics");
+    expect(clustered).not.toContain("example");
 
     const sitemap = found.find((row) => row.rule === "sitemap-blocked");
-    expect(sitemap?.dane).toMatchObject({ url: "https://bezkolejki.org/sitemap.xml", status: 403, bypass: false });
+    expect(sitemap?.dane).toMatchObject({ url: "https://example.com/sitemap.xml", status: 403, bypass: false });
     expect(sitemap?.opis).toMatch(/Googlebot/);
     expect(sitemap?.uzasadnienie).toMatch(/Do not bypass the WAF/);
     expect(`${sitemap?.opis} ${sitemap?.uzasadnienie}`).not.toMatch(/user-agent|curl|disable the waf/i);
   });
 
   it("drops a cluster when a page path and h1 already match it, and honors higher thresholds", () => {
-    const covered = rows({ extraPage: "https://bezkolejki.org/lekarz" });
-    expect(covered.filter((row) => row.rule === "landing-page-cluster").map((row) => row.dane.cluster)).toEqual(["kraków"]);
+    const covered = rows({ extraPage: "https://example.com/widget" });
+    expect(covered.filter((row) => row.rule === "landing-page-cluster").map((row) => row.dane.cluster)).toEqual(["orange"]);
 
     const stricter = rows({
       thresholds: {
@@ -118,11 +118,11 @@ describe("GSC opportunity rules", () => {
       },
     });
     expect(stricter.filter((row) => row.rule === "striking-distance-query").map((row) => row.dane.query).sort()).toEqual([
-      "bez kolejki nfz",
-      "bezkolejki nfz",
+      "example topics",
+      "example topics two",
     ]);
     expect(stricter.some((row) => row.rule === "ctr-below-expected-query")).toBe(false);
-    expect(stricter.filter((row) => row.rule === "landing-page-cluster").map((row) => row.dane.cluster)).toEqual(["lekarz"]);
+    expect(stricter.filter((row) => row.rule === "landing-page-cluster").map((row) => row.dane.cluster)).toEqual(["widget"]);
   });
 
   it("does not flag a sitemap that returned HTTP 200", () => {
@@ -133,7 +133,7 @@ describe("GSC opportunity rules", () => {
     const band = (impressions: number, ctr: number, position: number) =>
       new Set(
         recommend({
-          domain: "bezkolejki.org",
+          domain: "example.com",
           crawl: [],
           queries: [{ query: "edge case", clicks: 0, impressions, ctr, position }],
           pages: [],

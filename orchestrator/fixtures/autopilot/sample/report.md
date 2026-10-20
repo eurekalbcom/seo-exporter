@@ -8,41 +8,70 @@ Recommendations: 14
 Each recommendation starts as proposed. Approve or reject it in the decision log.
 This tool does not change the site or Search Console.
 
-## rec_37e4c53672c1
+## rec_00d7d9dd9d74
 
 - status: proposed
-- opis: Rewrite the title and description for the query "kolejka wizyta"
-- uzasadnienie: The query has 400 impressions, CTR 0.5%, and average position 8.2.
+- opis: Rewrite the title and description for https://example.com/
+- uzasadnienie: The page has 300 impressions, CTR 0.6%, and average position 10.
 - ryzyko: A snippet change can lower clicks if the new text matches the query worse.
 - rollback: Restore the previous title and meta description. No change has been applied.
 - dane:
 
 ````json
 {
-  "query": "kolejka wizyta",
-  "clicks": 2,
-  "impressions": 400,
-  "ctr": 0.005,
-  "position": 8.2
+  "page": "https://example.com/",
+  "clicks": 4,
+  "impressions": 300,
+  "ctr": 0.006,
+  "position": 10
 }
 ````
 
-## rec_3ee20a3be806
+## rec_027ef1f3e7bd
 
 - status: proposed
-- opis: Rewrite the title and description for https://eurekalb.com/
-- uzasadnienie: The page has 500 impressions, CTR 0.6%, and average position 9.
-- ryzyko: A snippet change can lower clicks if the new text matches the query worse.
+- opis: Rewrite the title and meta description on https://example.com/.
+- uzasadnienie: CTR is 0.6% at position 10. The curve for that position is about 1.5%.
+- ryzyko: A snippet that over-promises can earn the click and lose the visitor.
 - rollback: Restore the previous title and meta description. No change has been applied.
 - dane:
 
 ````json
 {
-  "page": "https://eurekalb.com/",
-  "clicks": 3,
-  "impressions": 500,
+  "page": "https://example.com/",
+  "clicks": 4,
+  "impressions": 300,
   "ctr": 0.006,
-  "position": 9
+  "position": 10,
+  "expectedCtr": 0.015,
+  "maxCtrRatio": 0.5
+}
+````
+
+## rec_305eeda6e49c
+
+- status: proposed
+- opis: Suggest a title, h1, and on-page section for "example query a".
+- uzasadnienie: The query is at position 7.5 with 250 impressions, inside the striking-distance band.
+- ryzyko: Changing the title, h1, or body can move rankings for other queries on the same URL.
+- rollback: Restore the previous title, h1, and page text. No change has been applied.
+- dane:
+
+````json
+{
+  "query": "example query a",
+  "clicks": 3,
+  "impressions": 250,
+  "ctr": 0.004,
+  "position": 7.5,
+  "page": null,
+  "title": null,
+  "h1": [],
+  "thresholds": {
+    "minPosition": 4,
+    "maxPosition": 20,
+    "minImpressions": 10
+  }
 }
 ````
 
@@ -81,27 +110,6 @@ This tool does not change the site or Search Console.
 }
 ````
 
-## rec_7559a00f3ff1
-
-- status: proposed
-- opis: Rewrite the title and meta description for the query "kolejka wizyta".
-- uzasadnienie: CTR is 0.5% at position 8.2. The curve for that position is about 2.5%.
-- ryzyko: A snippet that over-promises can earn the click and lose the visitor.
-- rollback: Restore the previous title and meta description. No change has been applied.
-- dane:
-
-````json
-{
-  "query": "kolejka wizyta",
-  "clicks": 2,
-  "impressions": 400,
-  "ctr": 0.005,
-  "position": 8.2,
-  "expectedCtr": 0.025,
-  "maxCtrRatio": 0.5
-}
-````
-
 ## rec_838144185c71
 
 - status: proposed
@@ -132,6 +140,27 @@ This tool does not change the site or Search Console.
 {
   "url": "https://eurekalb.com/blank",
   "title": null
+}
+````
+
+## rec_9358c5a2b866
+
+- status: proposed
+- opis: Rewrite the title and meta description for the query "example query a".
+- uzasadnienie: CTR is 0.4% at position 7.5. The curve for that position is about 2.5%.
+- ryzyko: A snippet that over-promises can earn the click and lose the visitor.
+- rollback: Restore the previous title and meta description. No change has been applied.
+- dane:
+
+````json
+{
+  "query": "example query a",
+  "clicks": 3,
+  "impressions": 250,
+  "ctr": 0.004,
+  "position": 7.5,
+  "expectedCtr": 0.025,
+  "maxCtrRatio": 0.5
 }
 ````
 
@@ -167,30 +196,22 @@ This tool does not change the site or Search Console.
 }
 ````
 
-## rec_b0f07499e2de
+## rec_d99048d59b72
 
 - status: proposed
-- opis: Suggest a title, h1, and on-page section for "kolejka wizyta".
-- uzasadnienie: The query is at position 8.2 with 400 impressions, inside the striking-distance band.
-- ryzyko: Changing the title, h1, or body can move rankings for other queries on the same URL.
-- rollback: Restore the previous title, h1, and page text. No change has been applied.
+- opis: Rewrite the title and description for the query "example query a"
+- uzasadnienie: The query has 250 impressions, CTR 0.4%, and average position 7.5.
+- ryzyko: A snippet change can lower clicks if the new text matches the query worse.
+- rollback: Restore the previous title and meta description. No change has been applied.
 - dane:
 
 ````json
 {
-  "query": "kolejka wizyta",
-  "clicks": 2,
-  "impressions": 400,
-  "ctr": 0.005,
-  "position": 8.2,
-  "page": null,
-  "title": null,
-  "h1": [],
-  "thresholds": {
-    "minPosition": 4,
-    "maxPosition": 20,
-    "minImpressions": 10
-  }
+  "query": "example query a",
+  "clicks": 3,
+  "impressions": 250,
+  "ctr": 0.004,
+  "position": 7.5
 }
 ````
 
@@ -224,27 +245,6 @@ This tool does not change the site or Search Console.
   "from": "https://eurekalb.com/",
   "to": "https://eurekalb.com/missing",
   "status": 404
-}
-````
-
-## rec_f7d181626570
-
-- status: proposed
-- opis: Rewrite the title and meta description on https://eurekalb.com/.
-- uzasadnienie: CTR is 0.6% at position 9. The curve for that position is about 2.0%.
-- ryzyko: A snippet that over-promises can earn the click and lose the visitor.
-- rollback: Restore the previous title and meta description. No change has been applied.
-- dane:
-
-````json
-{
-  "page": "https://eurekalb.com/",
-  "clicks": 3,
-  "impressions": 500,
-  "ctr": 0.006,
-  "position": 9,
-  "expectedCtr": 0.02,
-  "maxCtrRatio": 0.5
 }
 ````
 

@@ -1,4 +1,5 @@
 import { hostOf, normalizeUrl, type OriginCrawl } from "./crawl";
+import { escapeMarkdownInline } from "./markdown-text";
 import {
   ctrBelowExpectedPages,
   ctrBelowExpectedQueries,
@@ -230,7 +231,7 @@ function inCtrBand(row: { impressions: number; ctr: number; position: number }):
 function lowCtrQueries(input: RecommendInput): Recommendation[] {
   return input.queries.filter(inCtrBand).map((row) =>
     propose(input.domain, "low-ctr-query", row.query, {
-      opis: `Rewrite the title and description for the query "${row.query}"`,
+      opis: `Rewrite the title and description for the query "${escapeMarkdownInline(row.query)}"`,
       uzasadnienie: `The query has ${row.impressions} impressions, CTR ${formatPct(row.ctr)}, and average position ${row.position}.`,
       dane: { query: row.query, clicks: row.clicks, impressions: row.impressions, ctr: row.ctr, position: row.position },
       ryzyko: "A snippet change can lower clicks if the new text matches the query worse.",

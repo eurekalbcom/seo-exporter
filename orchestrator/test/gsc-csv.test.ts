@@ -5,22 +5,22 @@ const QUERIES = `\uFEFF# exported by hand from Search Console
 Date range,2026-01-01,2026-01-31
 
 Top queries,Clicks,Impressions,CTR,Position
-"kolejka, wizyta",2,400,0.5%,8.2
-marka,80,"1,000",80%,1.2
+"example, query",3,150,1.5%,6.5
+example query b,40,"1,000",70%,1.5
 `;
 
 describe("Search Console CSV", () => {
   it("parses a queries export with a preamble, a BOM, and quoted commas", () => {
     expect(parseGscQueries(QUERIES)).toEqual([
-      { query: "kolejka, wizyta", clicks: 2, impressions: 400, ctr: 0.005, position: 8.2 },
-      { query: "marka", clicks: 80, impressions: 1000, ctr: 0.8, position: 1.2 },
+      { query: "example, query", clicks: 3, impressions: 150, ctr: 0.015, position: 6.5 },
+      { query: "example query b", clicks: 40, impressions: 1000, ctr: 0.7, position: 1.5 },
     ]);
   });
 
   it("parses Polish page headers and a ratio CTR", () => {
-    const csv = "Najpopularniejsze strony,Kliknięcia,Wyświetlenia,CTR,Pozycja\nhttps://eurekalb.com/,3,500,0.006,9\n";
+    const csv = "Najpopularniejsze strony,Kliknięcia,Wyświetlenia,CTR,Pozycja\nhttps://example.com/,5,80,0.02,6\n";
     expect(parseGscPages(csv)).toEqual([
-      { page: "https://eurekalb.com/", clicks: 3, impressions: 500, ctr: 0.006, position: 9 },
+      { page: "https://example.com/", clicks: 5, impressions: 80, ctr: 0.02, position: 6 },
     ]);
   });
 
@@ -32,7 +32,7 @@ describe("Search Console CSV", () => {
   });
 
   it("rejects a pages file passed as queries and a table with no header", () => {
-    expect(() => parseGscQueries("Top pages,Clicks,Impressions,CTR,Position\nhttps://eurekalb.com/,1,1,1%,1\n")).toThrow(
+    expect(() => parseGscQueries("Top pages,Clicks,Impressions,CTR,Position\nhttps://example.com/,1,1,1%,1\n")).toThrow(
       /queries export/
     );
     expect(() => parseGscPages("not,a,console,export\n")).toThrow(/header row/);

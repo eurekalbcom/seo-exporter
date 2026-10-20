@@ -8,7 +8,7 @@ import { crawlOrigins, type OriginCrawl } from "../src/autopilot/crawl";
 import { loadFixtureSite } from "../src/autopilot/fixture-site";
 import { parseGscPages, parseGscQueries } from "../src/autopilot/gsc-csv";
 import { recommend } from "../src/autopilot/recommend";
-import { readReport } from "../src/autopilot/report";
+import { readReport, renderMarkdown } from "../src/autopilot/report";
 
 const ROOT = join(import.meta.dirname, "..");
 const FIXTURE = join(ROOT, "fixtures/autopilot");
@@ -71,12 +71,12 @@ describe("recommendations from the fixture", () => {
       expect(JSON.stringify(row.dane)).not.toMatch(/evil\.example/);
     }
     expect(rows.find((row) => row.rule === "low-ctr-query")?.dane).toMatchObject({
-      query: "kolejka wizyta",
-      impressions: 400,
-      ctr: 0.005,
-      position: 8.2,
+      query: "example query a",
+      impressions: 250,
+      ctr: 0.004,
+      position: 7.5,
     });
-    expect(rows.some((row) => row.dane.query === "marka")).toBe(false);
+    expect(rows.some((row) => row.dane.query === "example query b")).toBe(false);
   });
 
   it("does not invent tag findings for unparsed pages or sitemap gaps for URLs it never fetched", () => {
@@ -160,6 +160,32 @@ describe("recommendations from the fixture", () => {
     expect(rules(100, 0.029, 3.9).has("low-ctr-query")).toBe(false);
     expect(rules(100, 0.029, 20).has("low-ctr-query")).toBe(true);
     expect(rules(100, 0.029, 20.1).has("low-ctr-query")).toBe(false);
+  });
+
+  it("escapes markdown and newlines in query text in the report", () => {
+    const query = "alpha *beta*\n_gamma_ [link](https://example.com)";
+    const [row] = recommend({
+      domain: "example.com",
+      crawl: [],
+      queries: [{ query, clicks: 0, impressions: 250, ctr: 0.004, position: 7.5 }],
+      pages: [],
+    }).filter((item) => item.rule === "low-ctr-query");
+    expect(row?.dane.query).toBe(query);
+    expect(row?.opis).not.toMatch(/[\r\n]/);
+    expect(row?.opis).toContain("alpha \\*beta\\* \\_gamma\\_ \\[link\\]\\(https://example\\.com\\)");
+    expect(row?.uzasadnienie).not.toMatch(/[\r\n]/);
+    const markdown = renderMarkdown({
+      generatedAt: "2026-01-15T05:00:00.000Z",
+      domain: "example.com",
+      mode: "fixture",
+      recommendations: row ? [row] : [],
+      crawl: [],
+      queries: [],
+      pages: [],
+    });
+    const opisLine = markdown.split("\n").find((line) => line.startsWith("- opis:"));
+    expect(opisLine).toBe(`- opis: ${row?.opis}`);
+    expect(opisLine).toContain("\\*beta\\*");
   });
 });
 
