@@ -3,7 +3,7 @@
 Domain: eurekalb.com
 Generated: 2026-01-15T05:00:00.000Z
 Mode: fixture
-Recommendations: 11
+Recommendations: 14
 
 Each recommendation starts as proposed. Approve or reject it in the decision log.
 This tool does not change the site or Search Console.
@@ -81,6 +81,27 @@ This tool does not change the site or Search Console.
 }
 ````
 
+## rec_7559a00f3ff1
+
+- status: proposed
+- opis: Rewrite the title and meta description for the query "kolejka wizyta".
+- uzasadnienie: CTR is 0.5% at position 8.2. The curve for that position is about 2.5%.
+- ryzyko: A snippet that over-promises can earn the click and lose the visitor.
+- rollback: Restore the previous title and meta description. No change has been applied.
+- dane:
+
+````json
+{
+  "query": "kolejka wizyta",
+  "clicks": 2,
+  "impressions": 400,
+  "ctr": 0.005,
+  "position": 8.2,
+  "expectedCtr": 0.025,
+  "maxCtrRatio": 0.5
+}
+````
+
 ## rec_838144185c71
 
 - status: proposed
@@ -146,6 +167,33 @@ This tool does not change the site or Search Console.
 }
 ````
 
+## rec_b0f07499e2de
+
+- status: proposed
+- opis: Suggest a title, h1, and on-page section for "kolejka wizyta".
+- uzasadnienie: The query is at position 8.2 with 400 impressions, inside the striking-distance band.
+- ryzyko: Changing the title, h1, or body can move rankings for other queries on the same URL.
+- rollback: Restore the previous title, h1, and page text. No change has been applied.
+- dane:
+
+````json
+{
+  "query": "kolejka wizyta",
+  "clicks": 2,
+  "impressions": 400,
+  "ctr": 0.005,
+  "position": 8.2,
+  "page": null,
+  "title": null,
+  "h1": [],
+  "thresholds": {
+    "minPosition": 4,
+    "maxPosition": 20,
+    "minImpressions": 10
+  }
+}
+````
+
 ## rec_e04567e45c66
 
 - status: proposed
@@ -176,6 +224,27 @@ This tool does not change the site or Search Console.
   "from": "https://eurekalb.com/",
   "to": "https://eurekalb.com/missing",
   "status": 404
+}
+````
+
+## rec_f7d181626570
+
+- status: proposed
+- opis: Rewrite the title and meta description on https://eurekalb.com/.
+- uzasadnienie: CTR is 0.6% at position 9. The curve for that position is about 2.0%.
+- ryzyko: A snippet that over-promises can earn the click and lose the visitor.
+- rollback: Restore the previous title and meta description. No change has been applied.
+- dane:
+
+````json
+{
+  "page": "https://eurekalb.com/",
+  "clicks": 3,
+  "impressions": 500,
+  "ctr": 0.006,
+  "position": 9,
+  "expectedCtr": 0.02,
+  "maxCtrRatio": 0.5
 }
 ````
 

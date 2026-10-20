@@ -1,6 +1,15 @@
-import { createHash } from "node:crypto";
 import { hostOf, normalizeUrl, type OriginCrawl } from "./crawl";
+import {
+  ctrBelowExpectedPages,
+  ctrBelowExpectedQueries,
+  landingPageClusters,
+  resolveGscThresholds,
+  sitemapBlocked,
+  strikingDistanceQueries,
+  type GscThresholdOverrides,
+} from "./gsc-rules";
 import type { GscPageRow, GscQueryRow } from "./gsc-csv";
+import { recommendationId } from "./recommendation-id";
 
 export const LOW_CTR = {
   minImpressions: 100,
@@ -28,14 +37,12 @@ export type RecommendInput = {
   crawl: OriginCrawl[];
   queries: GscQueryRow[];
   pages: GscPageRow[];
+  thresholds?: GscThresholdOverrides;
 };
 
 const UNAPPLIED = "No change has been applied.";
 
-export function recommendationId(domain: string, rule: string, subject: string): string {
-  const digest = createHash("sha256").update(`${domain}\n${rule}\n${subject}`).digest("hex").slice(0, 12);
-  return `rec_${digest}`;
-}
+export { recommendationId } from "./recommendation-id";
 
 function propose(
   domain: string,
@@ -244,23 +251,28 @@ function lowCtrPages(input: RecommendInput): Recommendation[] {
   );
 }
 
-const RULES: Array<(input: RecommendInput) => Recommendation[]> = [
-  missingTitle,
-  missingMeta,
-  missingH1,
-  multipleH1,
-  missingCanonical,
-  noindex,
-  brokenLinks,
-  redirects,
-  sitemapGaps,
-  lowCtrQueries,
-  lowCtrPages,
-];
-
 export function recommend(input: RecommendInput): Recommendation[] {
+  const thresholds = resolveGscThresholds(input.thresholds);
+  const rules: Array<(value: RecommendInput) => Recommendation[]> = [
+    missingTitle,
+    missingMeta,
+    missingH1,
+    multipleH1,
+    missingCanonical,
+    noindex,
+    brokenLinks,
+    redirects,
+    sitemapGaps,
+    lowCtrQueries,
+    lowCtrPages,
+    (value) => strikingDistanceQueries(value, thresholds),
+    (value) => ctrBelowExpectedQueries(value, thresholds),
+    (value) => ctrBelowExpectedPages(value, thresholds),
+    (value) => landingPageClusters(value, thresholds),
+    sitemapBlocked,
+  ];
   const byId = new Map<string, Recommendation>();
-  for (const rule of RULES) {
+  for (const rule of rules) {
     for (const row of rule(input)) {
       if (!byId.has(row.id)) byId.set(row.id, row);
     }

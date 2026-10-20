@@ -69,6 +69,25 @@
       "rollback": "Restore the previous headings. No change has been applied."
     },
     {
+      "id": "rec_7559a00f3ff1",
+      "domain": "eurekalb.com",
+      "rule": "ctr-below-expected-query",
+      "status": "proposed",
+      "opis": "Rewrite the title and meta description for the query \"kolejka wizyta\".",
+      "uzasadnienie": "CTR is 0.5% at position 8.2. The curve for that position is about 2.5%.",
+      "dane": {
+        "query": "kolejka wizyta",
+        "clicks": 2,
+        "impressions": 400,
+        "ctr": 0.005,
+        "position": 8.2,
+        "expectedCtr": 0.025,
+        "maxCtrRatio": 0.5
+      },
+      "ryzyko": "A snippet that over-promises can earn the click and lose the visitor.",
+      "rollback": "Restore the previous title and meta description. No change has been applied."
+    },
+    {
       "id": "rec_838144185c71",
       "domain": "eurekalb.com",
       "rule": "redirect",
@@ -126,6 +145,31 @@
       "rollback": "Remove the new canonical or restore the previous one. No change has been applied."
     },
     {
+      "id": "rec_b0f07499e2de",
+      "domain": "eurekalb.com",
+      "rule": "striking-distance-query",
+      "status": "proposed",
+      "opis": "Suggest a title, h1, and on-page section for \"kolejka wizyta\".",
+      "uzasadnienie": "The query is at position 8.2 with 400 impressions, inside the striking-distance band.",
+      "dane": {
+        "query": "kolejka wizyta",
+        "clicks": 2,
+        "impressions": 400,
+        "ctr": 0.005,
+        "position": 8.2,
+        "page": null,
+        "title": null,
+        "h1": [],
+        "thresholds": {
+          "minPosition": 4,
+          "maxPosition": 20,
+          "minImpressions": 10
+        }
+      },
+      "ryzyko": "Changing the title, h1, or body can move rankings for other queries on the same URL.",
+      "rollback": "Restore the previous title, h1, and page text. No change has been applied."
+    },
+    {
       "id": "rec_e04567e45c66",
       "domain": "eurekalb.com",
       "rule": "missing-meta-description",
@@ -153,6 +197,25 @@
       },
       "ryzyko": "Replacing the link sends visitors to a different URL.",
       "rollback": "Point the link back at https://eurekalb.com/missing. No change has been applied."
+    },
+    {
+      "id": "rec_f7d181626570",
+      "domain": "eurekalb.com",
+      "rule": "ctr-below-expected-page",
+      "status": "proposed",
+      "opis": "Rewrite the title and meta description on https://eurekalb.com/.",
+      "uzasadnienie": "CTR is 0.6% at position 9. The curve for that position is about 2.0%.",
+      "dane": {
+        "page": "https://eurekalb.com/",
+        "clicks": 3,
+        "impressions": 500,
+        "ctr": 0.006,
+        "position": 9,
+        "expectedCtr": 0.02,
+        "maxCtrRatio": 0.5
+      },
+      "ryzyko": "A snippet that over-promises can earn the click and lose the visitor.",
+      "rollback": "Restore the previous title and meta description. No change has been applied."
     },
     {
       "id": "rec_fa39d0eff330",

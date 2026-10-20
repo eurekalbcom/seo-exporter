@@ -48,6 +48,8 @@ describe("recommendations from the fixture", () => {
     });
     expect(rows.map((row) => row.rule).sort()).toEqual([
       "broken-link",
+      "ctr-below-expected-page",
+      "ctr-below-expected-query",
       "low-ctr-page",
       "low-ctr-query",
       "missing-canonical",
@@ -58,6 +60,7 @@ describe("recommendations from the fixture", () => {
       "noindex",
       "redirect",
       "sitemap-not-ok",
+      "striking-distance-query",
     ]);
     for (const row of rows) {
       expect(row.status).toBe("proposed");
@@ -150,12 +153,13 @@ describe("recommendations from the fixture", () => {
         queries: [{ query: "edge", clicks: 0, impressions, ctr, position }],
         pages: [],
       }).map((row) => row.rule);
-    expect(band(100, 0.029, 4)).toEqual(["low-ctr-query"]);
-    expect(band(99, 0.029, 4)).toEqual([]);
-    expect(band(100, 0.03, 4)).toEqual([]);
-    expect(band(100, 0.029, 3.9)).toEqual([]);
-    expect(band(100, 0.029, 20)).toEqual(["low-ctr-query"]);
-    expect(band(100, 0.029, 20.1)).toEqual([]);
+    const rules = (impressions: number, ctr: number, position: number) => new Set(band(impressions, ctr, position));
+    expect(rules(100, 0.029, 4).has("low-ctr-query")).toBe(true);
+    expect(rules(99, 0.029, 4).has("low-ctr-query")).toBe(false);
+    expect(rules(100, 0.03, 4).has("low-ctr-query")).toBe(false);
+    expect(rules(100, 0.029, 3.9).has("low-ctr-query")).toBe(false);
+    expect(rules(100, 0.029, 20).has("low-ctr-query")).toBe(true);
+    expect(rules(100, 0.029, 20.1).has("low-ctr-query")).toBe(false);
   });
 });
 
@@ -195,7 +199,7 @@ describe("cli", () => {
     const before = readFileSync(reportPath);
     const report = readReport(reportPath);
     const markdown = readFileSync(join(dir, "report.md"), "utf8");
-    expect(report.recommendations).toHaveLength(11);
+    expect(report.recommendations).toHaveLength(14);
     expect(markdown).toMatch(/opis:/);
     expect(markdown).toMatch(/uzasadnienie:/);
     expect(markdown).toMatch(/ryzyko:/);

@@ -115,6 +115,8 @@ Pass `--live` to crawl the public site. The files in `fixtures/autopilot/sample/
 
 Each recommendation has `opis`, `uzasadnienie`, `dane`, `ryzyko`, `rollback`, and `status`. Status starts as `proposed`. The decision log is the record of `approved` or `rejected`.
 
+Search Console rows add four rules. Thresholds live in `orchestrator/src/autopilot/gsc-rules.ts`: striking-distance queries (position 4-20), CTR below the expected curve for that position, a query cluster whose path and h1 have no match, and a sitemap response other than HTTP 200. The sitemap row says to check the WAF and Googlebot reachability. It does not bypass the control.
+
 ```bash
 cd orchestrator
 npm ci
