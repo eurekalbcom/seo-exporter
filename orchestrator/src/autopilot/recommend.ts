@@ -243,7 +243,7 @@ function lowCtrQueries(input: RecommendInput): Recommendation[] {
 function lowCtrPages(input: RecommendInput): Recommendation[] {
   return input.pages.filter(inCtrBand).map((row) =>
     propose(input.domain, "low-ctr-page", row.page, {
-      opis: `Rewrite the title and description for ${row.page}`,
+      opis: `Rewrite the title and description for ${escapeMarkdownInline(row.page)}`,
       uzasadnienie: `The page has ${row.impressions} impressions, CTR ${formatPct(row.ctr)}, and average position ${row.position}.`,
       dane: { page: row.page, clicks: row.clicks, impressions: row.impressions, ctr: row.ctr, position: row.position },
       ryzyko: "A snippet change can lower clicks if the new text matches the query worse.",

@@ -11,7 +11,7 @@ This tool does not change the site or Search Console.
 ## rec_00d7d9dd9d74
 
 - status: proposed
-- opis: Rewrite the title and description for https://example.com/
+- opis: Rewrite the title and description for https://example\.com/
 - uzasadnienie: The page has 300 impressions, CTR 0.6%, and average position 10.
 - ryzyko: A snippet change can lower clicks if the new text matches the query worse.
 - rollback: Restore the previous title and meta description. No change has been applied.
@@ -30,7 +30,7 @@ This tool does not change the site or Search Console.
 ## rec_027ef1f3e7bd
 
 - status: proposed
-- opis: Rewrite the title and meta description on https://example.com/.
+- opis: Rewrite the title and meta description on https://example\.com/.
 - uzasadnienie: CTR is 0.6% at position 10. The curve for that position is about 1.5%.
 - ryzyko: A snippet that over-promises can earn the click and lose the visitor.
 - rollback: Restore the previous title and meta description. No change has been applied.

@@ -8,7 +8,7 @@
       "domain": "eurekalb.com",
       "rule": "low-ctr-page",
       "status": "proposed",
-      "opis": "Rewrite the title and description for https://example.com/",
+      "opis": "Rewrite the title and description for https://example\\.com/",
       "uzasadnienie": "The page has 300 impressions, CTR 0.6%, and average position 10.",
       "dane": {
         "page": "https://example.com/",
@@ -25,7 +25,7 @@
       "domain": "eurekalb.com",
       "rule": "ctr-below-expected-page",
       "status": "proposed",
-      "opis": "Rewrite the title and meta description on https://example.com/.",
+      "opis": "Rewrite the title and meta description on https://example\\.com/.",
       "uzasadnienie": "CTR is 0.6% at position 10. The curve for that position is about 1.5%.",
       "dane": {
         "page": "https://example.com/",

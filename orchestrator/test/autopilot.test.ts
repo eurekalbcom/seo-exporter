@@ -163,7 +163,7 @@ describe("recommendations from the fixture", () => {
   });
 
   it("escapes markdown and newlines in query text in the report", () => {
-    const query = "alpha *beta*\n_gamma_ [link](https://example.com)";
+    const query = "alpha *beta*\n_gamma_ [link](https://example.com) | `code` <tag>\r";
     const [row] = recommend({
       domain: "example.com",
       crawl: [],
@@ -172,7 +172,10 @@ describe("recommendations from the fixture", () => {
     }).filter((item) => item.rule === "low-ctr-query");
     expect(row?.dane.query).toBe(query);
     expect(row?.opis).not.toMatch(/[\r\n]/);
-    expect(row?.opis).toContain("alpha \\*beta\\* \\_gamma\\_ \\[link\\]\\(https://example\\.com\\)");
+    expect(row?.opis).toContain(
+      "alpha \\*beta\\* \\_gamma\\_ \\[link\\]\\(https://example\\.com\\) \\| \\`code\\` &lt;tag&gt; "
+    );
+    expect(row?.opis).not.toContain("<tag>");
     expect(row?.uzasadnienie).not.toMatch(/[\r\n]/);
     const markdown = renderMarkdown({
       generatedAt: "2026-01-15T05:00:00.000Z",
@@ -186,6 +189,57 @@ describe("recommendations from the fixture", () => {
     const opisLine = markdown.split("\n").find((line) => line.startsWith("- opis:"));
     expect(opisLine).toBe(`- opis: ${row?.opis}`);
     expect(opisLine).toContain("\\*beta\\*");
+    expect(opisLine).toContain("&lt;tag&gt;");
+  });
+
+  it("escapes a page URL that contains markdown, angle brackets, or a carriage return", () => {
+    const page = "https://example.com/a|b`c<d>e\r";
+    const escaped = "https://example\\.com/a\\|b\\`c&lt;d&gt;e ";
+    const crawl: OriginCrawl[] = [
+      {
+        origin: "https://example.com",
+        robotsStatus: 200,
+        robotsOutcome: "rules",
+        crawlDelaySeconds: null,
+        sitemapUrls: [],
+        pages: [
+          {
+            url: page,
+            status: 200,
+            contentType: "text/html",
+            title: "alpha topic",
+            metaDescription: null,
+            canonical: null,
+            h1: ["alpha topic"],
+            noindex: false,
+            links: [],
+            parsedHtml: true,
+          },
+        ],
+        redirects: [],
+        blockedByRobots: [],
+        brokenLinks: [],
+        skippedOffHost: [],
+        requests: [],
+      },
+    ];
+    const rows = recommend({
+      domain: "example.com",
+      crawl,
+      queries: [{ query: "alpha topic", clicks: 1, impressions: 30, ctr: 0.2, position: 8 }],
+      pages: [{ page, clicks: 1, impressions: 200, ctr: 0.01, position: 8 }],
+    });
+    const lowCtr = rows.find((row) => row.rule === "low-ctr-page");
+    const below = rows.find((row) => row.rule === "ctr-below-expected-page");
+    const striking = rows.find((row) => row.rule === "striking-distance-query");
+    expect(lowCtr?.dane.page).toBe(page);
+    expect(lowCtr?.opis).toContain(escaped);
+    expect(lowCtr?.opis).not.toMatch(/\r/);
+    expect(lowCtr?.opis).not.toContain("<d>");
+    expect(below?.opis).toContain(escaped);
+    expect(striking?.dane.page).toBe(page);
+    expect(striking?.opis).toContain(` on ${escaped}`);
+    expect(striking?.opis).not.toMatch(/\r/);
   });
 });
 

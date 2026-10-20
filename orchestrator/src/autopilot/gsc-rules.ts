@@ -167,7 +167,7 @@ export function strikingDistanceQueries(input: RecommendInput, thresholds: GscTh
   const pages = knownPages(input);
   return input.queries.filter((row) => inStrikingBand(row, thresholds)).map((row) => {
     const page = bestPage(row.query, pages);
-    const where = page ? ` on ${page.url}` : "";
+    const where = page ? ` on ${escapeMarkdownInline(page.url)}` : "";
     return propose(input.domain, "striking-distance-query", row.query, {
       opis: `Suggest a title, h1, and on-page section for "${escapeMarkdownInline(row.query)}"${where}.`,
       uzasadnienie: `The query is at position ${row.position} with ${row.impressions} impressions, inside the striking-distance band.`,
@@ -218,7 +218,7 @@ export function ctrBelowExpectedPages(input: RecommendInput, thresholds: GscThre
     if (expected === null) return [];
     return [
       propose(input.domain, "ctr-below-expected-page", row.page, {
-        opis: `Rewrite the title and meta description on ${row.page}.`,
+        opis: `Rewrite the title and meta description on ${escapeMarkdownInline(row.page)}.`,
         uzasadnienie: `CTR is ${formatPct(row.ctr)} at position ${row.position}. The curve for that position is about ${formatPct(expected)}.`,
         dane: ctrDane(row, expected, thresholds),
         ryzyko: "A snippet that over-promises can earn the click and lose the visitor.",
