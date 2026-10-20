@@ -28,6 +28,9 @@ export async function safeRequest(
   headers.set("user-agent", USER_AGENT);
   headers.set("accept", headers.get("accept") ?? "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
   const timeout = AbortSignal.timeout(timeoutMs);
+  // Node 20 clears this timer if the signal is collected. AbortSignal.any only
+  // weak-refs its sources, so the listener is what keeps the timeout alive.
+  timeout.addEventListener("abort", () => undefined, { once: true });
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   return fetchImpl(url, {
     method,
