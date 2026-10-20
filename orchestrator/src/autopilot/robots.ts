@@ -17,6 +17,7 @@ export function parseRobots(text: string): ParsedRobots {
   let current: RobotsGroup | null = null;
   let seenRule = false;
   for (const raw of text.split(/\r\n|\n|\r/)) {
+    if (raw.trim().startsWith("#")) continue;
     const line = stripComment(raw);
     if (!line) {
       current = null;

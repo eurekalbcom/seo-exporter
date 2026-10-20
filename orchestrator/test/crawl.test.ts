@@ -53,6 +53,13 @@ describe("robots", () => {
       true
     );
   });
+
+  it("keeps the group across a comment and still splits on a blank line", () => {
+    const commented = parseRobots("User-agent: *\n# keep this group\nDisallow: /private\n");
+    expect(robotsAllows(commented, "https://eurekalb.com/private", USER_AGENT)).toBe(false);
+    const split = parseRobots("User-agent: *\nDisallow: /private\n\nAllow: /private\n");
+    expect(robotsAllows(split, "https://eurekalb.com/private", USER_AGENT)).toBe(false);
+  });
 });
 
 describe("polite crawl", () => {
@@ -178,5 +185,41 @@ describe("polite crawl", () => {
     ).rejects.toBeInstanceOf(CrawlDomainDeniedError);
     expect(called).toBe(false);
     expect(normalizeUrl("https://eurekalb.com/about/")).toBe("https://eurekalb.com/about");
+  });
+
+  it("skips a bad sitemap loc and a bad redirect without aborting the crawl", async () => {
+    const fetched: string[] = [];
+    const [report] = await crawlOrigins({
+      origins: ["https://eurekalb.com"],
+      env: ENV,
+      minDelayMs: 0,
+      sleep: async () => undefined,
+      fetchImpl: async (url) => {
+        fetched.push(url);
+        const path = new URL(url).pathname;
+        if (path === "/robots.txt") return new Response("User-agent: *\nDisallow:\n", { status: 200 });
+        if (path === "/sitemap.xml") {
+          return new Response(
+            "<urlset><loc>https://eurekalb.com/</loc><loc>not a url</loc><loc>https://eurekalb.com/jump</loc><loc>https://eurekalb.com/next</loc></urlset>",
+            { status: 200, headers: { "content-type": "application/xml" } }
+          );
+        }
+        if (path === "/jump") {
+          return new Response("", { status: 302, headers: { location: "http://" } });
+        }
+        return new Response("<html><title>Ok</title><h1>Ok</h1></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      },
+    });
+    expect(report?.sitemapUrls).toEqual([
+      "https://eurekalb.com/",
+      "https://eurekalb.com/jump",
+      "https://eurekalb.com/next",
+    ]);
+    expect(report?.pages.some((page) => page.url === "https://eurekalb.com/next")).toBe(true);
+    expect(fetched).toContain("https://eurekalb.com/jump");
+    expect(report?.pages.some((page) => page.url === "https://eurekalb.com/jump")).toBe(false);
   });
 });

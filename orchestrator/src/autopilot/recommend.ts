@@ -61,7 +61,7 @@ function siteFor(input: RecommendInput): OriginCrawl | undefined {
 }
 
 function indexableHtml(input: RecommendInput): OriginCrawl["pages"] {
-  return (siteFor(input)?.pages ?? []).filter((page) => page.status === 200 && !page.noindex);
+  return (siteFor(input)?.pages ?? []).filter((page) => page.status === 200 && !page.noindex && page.parsedHtml);
 }
 
 function missingTitle(input: RecommendInput): Recommendation[] {
@@ -190,8 +190,9 @@ function sitemapGaps(input: RecommendInput): Recommendation[] {
 }
 
 function sitemapResolves(site: OriginCrawl, loc: string): boolean {
-  if (site.blockedByRobots.includes(normalizeUrl(loc))) return true;
-  let current = normalizeUrl(loc);
+  const start = normalizeUrl(loc);
+  if (site.blockedByRobots.includes(start)) return true;
+  let current = start;
   const seen = new Set<string>();
   while (!seen.has(current)) {
     seen.add(current);
@@ -203,7 +204,11 @@ function sitemapResolves(site: OriginCrawl, loc: string): boolean {
       return false;
     }
   }
-  return site.pages.some((page) => page.url === current && page.status === 200);
+  if (site.blockedByRobots.includes(current)) return true;
+  const page = site.pages.find((item) => item.url === current);
+  if (page) return page.status === 200;
+  if (!site.requests.some((item) => item.url === start)) return true;
+  return false;
 }
 
 function inCtrBand(row: { impressions: number; ctr: number; position: number }): boolean {

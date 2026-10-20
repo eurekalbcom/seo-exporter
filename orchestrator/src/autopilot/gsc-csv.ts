@@ -91,7 +91,7 @@ function column(headers: string[], names: string[]): number {
 }
 
 function parseCount(raw: string, label: string): number {
-  const value = Number(raw.trim().replace(/[\s\u00a0]/g, "").replace(",", ""));
+  const value = Number(raw.trim().replace(/[\s\u00a0]/g, "").replace(/,/g, ""));
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`Invalid ${label}: ${raw}`);
   }

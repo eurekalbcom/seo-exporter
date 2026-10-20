@@ -24,6 +24,13 @@ describe("Search Console CSV", () => {
     ]);
   });
 
+  it("parses counts with more than one thousands separator", () => {
+    const csv = 'Top queries,Clicks,Impressions,CTR,Position\n"big","1,234,567","2,000,000",1%,4\n';
+    expect(parseGscQueries(csv)).toEqual([
+      { query: "big", clicks: 1234567, impressions: 2000000, ctr: 0.01, position: 4 },
+    ]);
+  });
+
   it("rejects a pages file passed as queries and a table with no header", () => {
     expect(() => parseGscQueries("Top pages,Clicks,Impressions,CTR,Position\nhttps://eurekalb.com/,1,1,1%,1\n")).toThrow(
       /queries export/

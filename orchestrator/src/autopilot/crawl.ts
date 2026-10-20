@@ -35,6 +35,7 @@ export type CrawlPage = {
   h1: string[];
   noindex: boolean;
   links: string[];
+  parsedHtml: boolean;
 };
 
 export type BrokenLink = { from: string; to: string; status: number };
@@ -204,8 +205,16 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
     const index = /<sitemapindex\b/i.test(xml);
     for (const loc of locs) {
       if (!loc) continue;
-      if (index) sitemapQueue.push(loc);
-      else if (pageLocs.length < MAX_SITEMAP_URLS) pageLocs.push(normalizeUrl(loc));
+      if (index) {
+        sitemapQueue.push(loc);
+        continue;
+      }
+      if (pageLocs.length >= MAX_SITEMAP_URLS) continue;
+      try {
+        pageLocs.push(normalizeUrl(loc));
+      } catch {
+        continue;
+      }
     }
   }
   report.sitemapUrls = pageLocs;
@@ -229,7 +238,13 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
       const res = await get(current);
       const location = res.headers.get("location");
       if (res.status >= 300 && res.status < 400 && location) {
-        const next = normalizeUrl(location, current);
+        let next: string;
+        try {
+          next = normalizeUrl(location, current);
+        } catch {
+          await readCapped(res);
+          return null;
+        }
         report.redirects.push({ from: current, to: next, status: res.status });
         await readCapped(res);
         if (!sameSite(origin, next)) return null;
@@ -278,10 +293,10 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
     seenDocs.add(doc.finalUrl);
     if (report.pages.some((page) => page.url === doc.finalUrl)) continue;
     const looksHtml = /html/i.test(doc.contentType) || /<!doctype|<html/i.test(doc.body);
-    const extract =
-      doc.status === 200 && looksHtml
-        ? extractHtml(doc.body, doc.finalUrl, doc.xRobots)
-        : { title: null, metaDescription: null, canonical: null, h1: [] as string[], noindex: false, links: [] as string[] };
+    const parsedHtml = doc.status === 200 && looksHtml;
+    const extract = parsedHtml
+      ? extractHtml(doc.body, doc.finalUrl, doc.xRobots)
+      : { title: null, metaDescription: null, canonical: null, h1: [] as string[], noindex: false, links: [] as string[] };
     report.pages.push({
       url: doc.finalUrl,
       status: doc.status,
@@ -292,6 +307,7 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
       h1: extract.h1,
       noindex: extract.noindex,
       links: extract.links,
+      parsedHtml,
     });
     for (const link of extract.links) {
       if (!sameSite(origin, link)) {
@@ -326,6 +342,7 @@ async function crawlOrigin(originInput: string, options: CrawlOptions): Promise<
             h1: [],
             noindex: false,
             links: [],
+            parsedHtml: false,
           });
         }
       }

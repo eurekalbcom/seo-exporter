@@ -204,7 +204,8 @@
             "https://eurekalb.com/missing",
             "https://eurekalb.com/private",
             "https://evil.example/phish"
-          ]
+          ],
+          "parsedHtml": true
         },
         {
           "url": "https://eurekalb.com/about",
@@ -215,7 +216,8 @@
           "canonical": null,
           "h1": [],
           "noindex": false,
-          "links": []
+          "links": [],
+          "parsedHtml": true
         },
         {
           "url": "https://eurekalb.com/guides",
@@ -229,7 +231,8 @@
             "Second guide"
           ],
           "noindex": false,
-          "links": []
+          "links": [],
+          "parsedHtml": true
         },
         {
           "url": "https://eurekalb.com/blank",
@@ -242,7 +245,8 @@
             "Blank title"
           ],
           "noindex": false,
-          "links": []
+          "links": [],
+          "parsedHtml": true
         },
         {
           "url": "https://eurekalb.com/noindex",
@@ -255,7 +259,8 @@
             "Hidden"
           ],
           "noindex": true,
-          "links": []
+          "links": [],
+          "parsedHtml": true
         },
         {
           "url": "https://eurekalb.com/ghost",
@@ -266,7 +271,8 @@
           "canonical": null,
           "h1": [],
           "noindex": false,
-          "links": []
+          "links": [],
+          "parsedHtml": false
         },
         {
           "url": "https://eurekalb.com/missing",
@@ -277,7 +283,8 @@
           "canonical": null,
           "h1": [],
           "noindex": false,
-          "links": []
+          "links": [],
+          "parsedHtml": false
         }
       ],
       "redirects": [

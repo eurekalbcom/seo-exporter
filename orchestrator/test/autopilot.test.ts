@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { appendDecision, readDecisions } from "../src/autopilot/approval";
 import { main } from "../src/autopilot/cli";
-import { crawlOrigins } from "../src/autopilot/crawl";
+import { crawlOrigins, type OriginCrawl } from "../src/autopilot/crawl";
 import { loadFixtureSite } from "../src/autopilot/fixture-site";
 import { parseGscPages, parseGscQueries } from "../src/autopilot/gsc-csv";
 import { recommend } from "../src/autopilot/recommend";
@@ -74,6 +74,71 @@ describe("recommendations from the fixture", () => {
       position: 8.2,
     });
     expect(rows.some((row) => row.dane.query === "marka")).toBe(false);
+  });
+
+  it("does not invent tag findings for unparsed pages or sitemap gaps for URLs it never fetched", () => {
+    const crawl: OriginCrawl[] = [
+      {
+        origin: "https://eurekalb.com",
+        robotsStatus: 200,
+        robotsOutcome: "rules",
+        crawlDelaySeconds: null,
+        sitemapUrls: ["https://eurekalb.com/pdf", "https://eurekalb.com/missing", "https://eurekalb.com/later"],
+        pages: [
+          {
+            url: "https://eurekalb.com/pdf",
+            status: 200,
+            contentType: "application/pdf",
+            title: null,
+            metaDescription: null,
+            canonical: null,
+            h1: [],
+            noindex: false,
+            links: [],
+            parsedHtml: false,
+          },
+          {
+            url: "https://eurekalb.com/stub",
+            status: 200,
+            contentType: "text/html",
+            title: null,
+            metaDescription: null,
+            canonical: null,
+            h1: [],
+            noindex: false,
+            links: [],
+            parsedHtml: false,
+          },
+          {
+            url: "https://eurekalb.com/missing",
+            status: 404,
+            contentType: "text/html",
+            title: null,
+            metaDescription: null,
+            canonical: null,
+            h1: [],
+            noindex: false,
+            links: [],
+            parsedHtml: false,
+          },
+        ],
+        redirects: [],
+        blockedByRobots: [],
+        brokenLinks: [],
+        skippedOffHost: [],
+        requests: [
+          { url: "https://eurekalb.com/pdf", method: "GET", status: 200 },
+          { url: "https://eurekalb.com/stub", method: "GET", status: 200 },
+          { url: "https://eurekalb.com/missing", method: "GET", status: 404 },
+        ],
+      },
+    ];
+    const rows = recommend({ domain: "eurekalb.com", crawl, queries: [], pages: [] });
+    expect(rows.map((row) => row.rule)).toEqual(["sitemap-not-ok"]);
+    expect(rows.find((row) => row.rule === "sitemap-not-ok")?.dane).toMatchObject({
+      url: "https://eurekalb.com/missing",
+      status: 404,
+    });
   });
 
   it("keeps the low-CTR band closed at the documented edges", () => {
