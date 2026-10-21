@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { BingKeyMissingError, listBingSites } from "@/lib/bing";
+import { redactError } from "@/lib/bing/redact-url";
 import { isBingEnabled } from "@/lib/flags";
 
 export async function GET() {
@@ -23,7 +24,7 @@ export async function GET() {
       );
     }
 
-    console.error("Error listing Bing sites:", error);
+    console.error("Error listing Bing sites:", redactError(error));
 
     return Response.json(
       {
