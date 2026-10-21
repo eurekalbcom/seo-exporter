@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { redactError } from "@/lib/bing/redact-url";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/encryption";
 import { isBingEnabled } from "@/lib/flags";
@@ -39,19 +40,20 @@ export async function GET() {
 
     return Response.json(providers);
   } catch (error) {
-    console.error("API keys GET error:", error);
+    console.error("API keys GET error:", redactError(error));
     return Response.json({ error: "Failed to load API keys" }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
+  let body: { provider?: string; login?: string; password?: string; apiKey?: string } | undefined;
   try {
     const session = await auth();
     if (!session?.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = (await req.json()) as {
+    body = (await req.json()) as {
       provider?: string;
       login?: string;
       password?: string;
@@ -99,7 +101,7 @@ export async function POST(req: Request) {
       { status: 201 }
     );
   } catch (error) {
-    console.error("API keys POST error:", error);
+    console.error("API keys POST error:", redactError(error, body?.apiKey));
     return Response.json({ error: "Failed to save API key" }, { status: 500 });
   }
 }
@@ -144,7 +146,7 @@ export async function DELETE(req: Request) {
 
     return Response.json({ success: true });
   } catch (error) {
-    console.error("API keys DELETE error:", error);
+    console.error("API keys DELETE error:", redactError(error));
     return Response.json({ error: "Failed to delete API key" }, { status: 500 });
   }
 }

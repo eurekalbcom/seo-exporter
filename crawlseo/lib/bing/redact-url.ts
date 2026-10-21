@@ -1,7 +1,34 @@
 const REDACTED = "[REDACTED]";
 
+/**
+ * Returned when redaction itself throws. Fixed text only: the catch path must
+ * not read the original value, message, or stack.
+ */
+const REDACTION_FAILED = "Bing request failed";
+
 /** A cause chain longer than this is cut off. `e.cause = e` is also cut by the WeakSet. */
 const MAX_REDACT_DEPTH = 8;
+
+/**
+ * Longer names first. `key` is also a suffix of `apikey` and `x-api-key`, and
+ * `token` / `secret` are suffixes of the longer names. Leftmost-longest is not
+ * how alternation works, so the longer spelling has to be tried first.
+ */
+const SENSITIVE_NAMES = [
+  "access_token",
+  "refresh_token",
+  "client_secret",
+  "subscription-key",
+  "x-api-key",
+  "id_token",
+  "api_key",
+  "apikey",
+  "password",
+  "secret",
+  "token",
+  "code",
+  "key",
+].join("|");
 
 /**
  * Query value as `URLSearchParams` writes it. That encoding uses `+` for a
@@ -18,18 +45,70 @@ function addVariant(variants: Set<string>, value: string) {
   if (value.includes("%")) variants.add(value.replace(/%/g, "%25"));
 }
 
+function base64Encode(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** UTF-16 code units, the form JSON and JavaScript emit as `\uXXXX`. */
+function unicodeEscaped(value: string): string {
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    out += `\\u${value.charCodeAt(i).toString(16).padStart(4, "0")}`;
+  }
+  return out;
+}
+
+function htmlNamed(value: string, apostrophe: "&#39;" | "&apos;"): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, apostrophe);
+}
+
+function htmlDecimal(value: string): string {
+  let out = "";
+  for (const ch of value) out += `&#${ch.codePointAt(0)};`;
+  return out;
+}
+
+function htmlHex(value: string): string {
+  let out = "";
+  for (const ch of value) out += `&#x${(ch.codePointAt(0) ?? 0).toString(16)};`;
+  return out;
+}
+
 function secretVariants(apiKey: string): string[] {
   const variants = new Set<string>();
   addVariant(variants, apiKey);
   addVariant(variants, encodeURIComponent(apiKey));
+  addVariant(variants, encodeURI(apiKey));
   addVariant(variants, queryEncoded(apiKey));
   addVariant(variants, JSON.stringify(apiKey).slice(1, -1));
+  const base64 = base64Encode(apiKey);
+  addVariant(variants, base64);
+  addVariant(variants, base64.replace(/\+/g, "-").replace(/\//g, "_"));
+  addVariant(variants, base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+  addVariant(variants, unicodeEscaped(apiKey));
+  addVariant(variants, htmlNamed(apiKey, "&#39;"));
+  addVariant(variants, htmlNamed(apiKey, "&apos;"));
+  addVariant(variants, htmlDecimal(apiKey));
+  addVariant(variants, htmlHex(apiKey));
   return [...variants].sort((left, right) => right.length - left.length);
 }
 
+function escapeRegExp(secret: string): string {
+  return secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Case-insensitive. An empty secret must not match between characters. */
 function replaceLiteral(value: string, secret: string): string {
   if (secret.length === 0) return value;
-  return value.split(secret).join(REDACTED);
+  return value.replace(new RegExp(escapeRegExp(secret), "gi"), REDACTED);
 }
 
 function hexClass(hex: string): string {
@@ -48,13 +127,16 @@ function replaceSecret(value: string, secret: string): string {
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     .replace(/%25[0-9A-Fa-f]{2}/g, (match) => `%25${hexClass(match.slice(3))}`)
     .replace(/%[0-9A-Fa-f]{2}/g, (match) => `%${hexClass(match.slice(1))}`);
-  return value.replace(new RegExp(pattern, "g"), REDACTED);
+  return value.replace(new RegExp(pattern, "gi"), REDACTED);
 }
 
-const SENSITIVE_QUERY =
-  /([?&#](?:access_token|refresh_token|client_secret|api_key|apikey|token)=)[^&#\s"'<>]*/gi;
-const JSON_KEY =
-  /\\?(["'])(access_token|refresh_token|client_secret|api_key|apikey|token)\\?\1\s*:\s*/gi;
+// Start of the string, whitespace, `;`, and the usual query/fragment markers.
+// `:` is a separator as well as `=`, so `apikey: value` is covered.
+const SENSITIVE_QUERY = new RegExp(
+  `(^|[?&#;\\s])(${SENSITIVE_NAMES})(\\s*[:=]\\s*)([^&#\\s"'<>;]*)`,
+  "gi"
+);
+const JSON_KEY = new RegExp(`\\\\?(["'])(${SENSITIVE_NAMES})\\\\?\\1\\s*:\\s*`, "gi");
 const AUTHORIZATION_MARK = /authorization\\?["']?\s*:\\?\s*/gi;
 const BEARER_MARK = /\bbearer\b/gi;
 
@@ -258,10 +340,11 @@ function redactJsonSecrets(value: string): string {
 /**
  * Replaces sensitive query values, JSON secrets, and `Authorization` /
  * `Bearer` headers. When `apiKey` is passed, also replaces that literal value
- * and its encoded forms, including `%25xx`. An empty key does not match
+ * and its encoded forms, including `%25xx`, base64, `\uXXXX`, HTML entities,
+ * and `encodeURI`. Matching is case-insensitive. An empty key does not match
  * between characters.
  */
-export function redactUrl(value: string, apiKey?: string): string {
+function redactUrlInner(value: string, apiKey?: string): string {
   let redacted = value;
   if (apiKey !== undefined && apiKey.length > 0) {
     for (const secret of secretVariants(apiKey)) {
@@ -269,8 +352,17 @@ export function redactUrl(value: string, apiKey?: string): string {
     }
   }
   return redactBearer(
-    redactAuthorization(redactJsonSecrets(redacted.replace(SENSITIVE_QUERY, `$1${REDACTED}`)))
+    redactAuthorization(redactJsonSecrets(redacted.replace(SENSITIVE_QUERY, `$1$2$3${REDACTED}`)))
   );
+}
+
+/** On any internal failure, a fixed string with none of `value`. */
+export function redactUrl(value: string, apiKey?: string): string {
+  try {
+    return redactUrlInner(value, apiKey);
+  } catch {
+    return REDACTION_FAILED;
+  }
 }
 
 function constructLike(error: Error, message: string, cause: unknown): Error {
@@ -385,7 +477,25 @@ function redactErrorLimited(
   );
 }
 
-/** Copies an error with `redactUrl` applied to message, stack, and cause. */
+function failedRedaction(): Error {
+  try {
+    const failure = new Error(REDACTION_FAILED);
+    failure.stack = REDACTION_FAILED;
+    return failure;
+  } catch {
+    return new Error(REDACTION_FAILED);
+  }
+}
+
+/**
+ * Copies an error with `redactUrl` applied to message, stack, and cause.
+ * On any internal failure, a new error whose message and stack are the fixed
+ * text and which does not carry the original cause.
+ */
 export function redactError(error: unknown, apiKey?: string): Error {
-  return redactErrorLimited(error, apiKey, new WeakSet(), 0);
+  try {
+    return redactErrorLimited(error, apiKey, new WeakSet(), 0);
+  } catch {
+    return failedRedaction();
+  }
 }

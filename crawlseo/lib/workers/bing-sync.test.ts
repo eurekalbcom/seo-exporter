@@ -80,4 +80,29 @@ describe("syncBingDataForSite", () => {
     expect(result.error).toMatch(/changed/);
     expect(tx.bingDaily.upsert).not.toHaveBeenCalled();
   });
+
+  it("redacts the key from the log and the error field", async () => {
+    const key = "secret/key 9f3a";
+    db.apiKey.findUnique.mockResolvedValue({
+      encryptedLogin: null,
+      encryptedPassword: encrypt(key),
+    });
+    db.$transaction.mockRejectedValueOnce(new Error(`write failed ${key} ${key.toUpperCase()}`));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await syncBingDataForSite("user-1", "site-a");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("[REDACTED]");
+      expect(result.error).not.toContain(key);
+      expect(result.error?.toUpperCase()).not.toContain(key.toUpperCase());
+      const logged = spy.mock.calls
+        .flat()
+        .map((part) => (part instanceof Error ? `${part.message}\n${part.stack ?? ""}` : String(part)))
+        .join("\n");
+      expect(logged).not.toContain(key);
+      expect(logged.toUpperCase()).not.toContain(key.toUpperCase());
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

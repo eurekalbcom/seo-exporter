@@ -190,6 +190,88 @@ describe("redactUrl", () => {
     );
     expect(redactError(new Error("keep-this"), "").message).toBe("keep-this");
   });
+
+  it("redacts the key and its encodings regardless of case", () => {
+    const key = "secret/key 9f3a";
+    const upper = key.toUpperCase();
+    const encoded = encodeURIComponent(key).toUpperCase();
+    const queried = new URLSearchParams({ apikey: key })
+      .toString()
+      .slice("apikey=".length)
+      .toUpperCase();
+    const redacted = redactUrl(`saw ${upper} and ${encoded} and ${queried}`, key);
+    expect(redacted).toBe("saw [REDACTED] and [REDACTED] and [REDACTED]");
+    expect(redacted.toUpperCase()).not.toContain(upper);
+  });
+
+  it("redacts base64, base64url, unicode escapes, HTML entities, and encodeURI", () => {
+    const key = 'sec<ret&key "9f3a';
+    const base64 = Buffer.from(key, "utf8").toString("base64");
+    const base64url = base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    let unicode = "";
+    let decimal = "";
+    let hex = "";
+    for (let i = 0; i < key.length; i++) {
+      const code = key.charCodeAt(i);
+      unicode += `\\u${code.toString(16).padStart(4, "0")}`;
+      decimal += `&#${code};`;
+      hex += `&#x${code.toString(16)};`;
+    }
+    const named = key
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+    const uri = encodeURI(key);
+    const redacted = redactUrl(
+      [key, base64, base64url, unicode, decimal, hex, named, uri].join(" | "),
+      key
+    );
+    for (const secret of [key, base64, base64url, unicode, decimal, hex, named, uri]) {
+      expect(redacted).not.toContain(secret);
+    }
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("redacts secret names at the start, after a space or semicolon, and with a colon", () => {
+    const names = [
+      "key",
+      "password",
+      "secret",
+      "subscription-key",
+      "x-api-key",
+      "id_token",
+      "code",
+      "apikey",
+    ];
+    for (const name of names) {
+      expect(redactUrl(`${name}=sek`)).toBe(`${name}=[REDACTED]`);
+      expect(redactUrl(`note ${name}=sek end`)).toBe(`note ${name}=[REDACTED] end`);
+      expect(redactUrl(`a=1;${name}=sek;b=2`)).toBe(`a=1;${name}=[REDACTED];b=2`);
+      expect(redactUrl(`${name}: sek`)).toBe(`${name}: [REDACTED]`);
+      expect(redactUrl(`{"${name}":"sek","ok":1}`)).toBe(`{"${name}":"[REDACTED]","ok":1}`);
+    }
+    expect(redactUrl("KEY=sek")).toBe("KEY=[REDACTED]");
+  });
+
+  it("returns a fixed message when redaction throws", () => {
+    const secret = "secret/key 9f3a";
+    const error = new Error("placeholder");
+    Object.defineProperty(error, "message", {
+      configurable: true,
+      get() {
+        throw new Error(`explode ${secret}`);
+      },
+    });
+    const redacted = redactError(error, secret);
+    expect(redacted.message).toBe("Bing request failed");
+    expect(redacted.stack).toBe("Bing request failed");
+    expect(redacted.cause).toBeUndefined();
+    expect(`${redacted.message}\n${redacted.stack}`).not.toContain(secret);
+
+    const broken = "secret\uD800key-9f3a";
+    expect(redactUrl(`prefix ${broken} suffix`, broken)).toBe("Bing request failed");
+  });
 });
 
 describe("redactCause", () => {
