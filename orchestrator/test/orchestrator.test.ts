@@ -100,10 +100,10 @@ describe("adapter", () => {
   it("posts a read job only for an allowlisted domain", async () => {
     const previous = process.env.CRAWL_ALLOWED_DOMAINS;
     process.env.CRAWL_ALLOWED_DOMAINS = "bezkolejki.org,eurekalb.com";
-    const calls: Array<{ url: string; method: string; body: string }> = [];
+    const calls: Array<{ url: string; method: string; body: string; redirect?: RequestRedirect; authorization: string | null }> = [];
     try {
       await triggerJob({
-        baseUrl: "http://crawlseo:3000",
+        baseUrl: "http://app:3000",
         token: "secret",
         job: "crawl",
         domain: "www.bezkolejki.org",
@@ -112,20 +112,24 @@ describe("adapter", () => {
             url: String(input),
             method: init?.method ?? "GET",
             body: String(init?.body ?? ""),
+            redirect: init?.redirect,
+            authorization: new Headers(init?.headers).get("authorization"),
           });
           return new Response("ok", { status: 202 });
         }) as typeof fetch,
       });
       expect(calls).toEqual([
         {
-          url: "http://crawlseo:3000/api/internal/jobs",
+          url: "http://app:3000/api/internal/jobs",
           method: "POST",
           body: JSON.stringify({ job: "crawl", domain: "www.bezkolejki.org" }),
+          redirect: "manual",
+          authorization: "Bearer secret",
         },
       ]);
       await expect(
         triggerJob({
-          baseUrl: "http://crawlseo:3000",
+          baseUrl: "http://app:3000",
           token: "secret",
           job: "crawl",
           domain: "example.com",
@@ -135,7 +139,7 @@ describe("adapter", () => {
       delete process.env.CRAWL_ALLOWED_DOMAINS;
       await expect(
         triggerJob({
-          baseUrl: "http://crawlseo:3000",
+          baseUrl: "http://app:3000",
           token: "secret",
           job: "crawl",
           domain: "www.bezkolejki.org",
