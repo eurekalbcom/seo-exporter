@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { redactError } from "@/lib/bing/redact-url";
 import { db } from "@/lib/db";
 import { isBingEnabled } from "@/lib/flags";
 import { syncBingDataForSite } from "@/lib/workers/bing-sync";
@@ -49,7 +50,7 @@ export async function POST(req: Request) {
 
     return Response.json(result);
   } catch (error) {
-    console.error("Bing sync error:", error);
+    console.error("Bing sync error:", redactError(error));
 
     return Response.json(
       { error: "Bing sync failed" },

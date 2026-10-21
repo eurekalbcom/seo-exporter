@@ -1,3 +1,4 @@
+import { redactUrl } from "@/lib/bing/redact-url";
 import { db } from "@/lib/db";
 import { isBingEnabled } from "@/lib/flags";
 import {
@@ -52,6 +53,7 @@ export async function syncBingDataForSite(
     return { success: false, ...empty, error: "Bing is disabled" };
   }
 
+  let apiKey: string | undefined;
   try {
     const site = await db.site.findUnique({
       where: { id: siteId },
@@ -68,7 +70,7 @@ export async function syncBingDataForSite(
 
     // Resolved once: with no key every endpoint below would reject and the
     // caller would see "every Bing endpoint failed" instead of "add a key".
-    const apiKey = await getBingApiKey(userId);
+    apiKey = await getBingApiKey(userId);
 
     // Four independent endpoints. Losing one should not throw away the three
     // that answered: there is no date parameter, so a retry re-downloads the
@@ -203,7 +205,13 @@ export async function syncBingDataForSite(
       ...(failed.length > 0 && { partial: failed }),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    let detail = "Unknown error";
+    try {
+      if (error instanceof Error && typeof error.message === "string") detail = error.message;
+    } catch {
+      detail = "Unknown error";
+    }
+    const message = redactUrl(detail, apiKey);
     console.error(`[Bing Sync] Error syncing site ${siteId}:`, message);
     return { success: false, ...empty, error: message };
   }

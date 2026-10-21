@@ -1,15 +1,17 @@
 import { auth } from "@/lib/auth";
 import { testBingKey } from "@/lib/bing";
+import { redactError } from "@/lib/bing/redact-url";
 import { isBingEnabled } from "@/lib/flags";
 
 export async function POST(req: Request) {
+  let body: { provider?: string; apiKey?: string } | undefined;
   try {
     const session = await auth();
     if (!session?.user?.id) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = (await req.json()) as {
+    body = (await req.json()) as {
       provider?: string;
       apiKey?: string;
     };
@@ -28,7 +30,7 @@ export async function POST(req: Request) {
     }
     return Response.json({ success: await testBingKey(body.apiKey) });
   } catch (error) {
-    console.error("API key test error:", error);
+    console.error("API key test error:", redactError(error, body?.apiKey));
     return Response.json({ error: "Connection test failed" }, { status: 500 });
   }
 }

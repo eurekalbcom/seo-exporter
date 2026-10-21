@@ -65,4 +65,23 @@ describe("api-keys provider allow-list", () => {
       "delete-key",
     ]);
   });
+
+  it("redacts a Bing key from a POST failure log", async () => {
+    const key = "secret/key 9f3a";
+    db.apiKey.upsert.mockRejectedValueOnce(new Error(`db ${key} ${key.toUpperCase()}`));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await POST(json("POST", { provider: "bing", apiKey: key }));
+      expect(res.status).toBe(500);
+      expect(JSON.stringify(await res.json())).not.toContain(key);
+      const logged = spy.mock.calls
+        .flat()
+        .map((part) => (part instanceof Error ? `${part.message}\n${part.stack ?? ""}` : String(part)))
+        .join("\n");
+      expect(logged).not.toContain(key);
+      expect(logged.toUpperCase()).not.toContain(key.toUpperCase());
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
