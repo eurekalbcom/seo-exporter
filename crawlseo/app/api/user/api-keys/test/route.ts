@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { testBingKey } from "@/lib/bing";
+import { redactError } from "@/lib/bing/redact-url";
 import { isBingEnabled } from "@/lib/flags";
 
 export async function POST(req: Request) {
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
     }
     return Response.json({ success: await testBingKey(body.apiKey) });
   } catch (error) {
-    console.error("API key test error:", error);
+    console.error("API key test error:", redactError(error));
     return Response.json({ error: "Connection test failed" }, { status: 500 });
   }
 }
