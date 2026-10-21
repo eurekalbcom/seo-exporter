@@ -9,9 +9,6 @@ import { fetchText } from "./engine";
 
 const PUBLIC = "93.184.216.34";
 
-// Canonical forms of the literals under test. The allowlist accepts them on
-// purpose, so a refusal has to come from the address check rather than from
-// the name list.
 const LITERAL_ALLOW = [
   "quilltab.app",
   "eurekalb.com",

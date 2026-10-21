@@ -107,7 +107,7 @@ describe("fetchText (robots.txt / sitemap)", () => {
 
     expect(await fetchText("https://quilltab.app/robots.txt")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(lookup).toHaveBeenLastCalledWith("internal.example", { all: true });
+    expect(lookup).not.toHaveBeenCalledWith("internal.example", { all: true });
   });
 
   it("does not follow a redirect to the metadata IP literal", async () => {
@@ -115,7 +115,7 @@ describe("fetchText (robots.txt / sitemap)", () => {
 
     expect(await fetchText("https://quilltab.app/sitemap.xml")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(lookup).toHaveBeenLastCalledWith("169.254.169.254", { all: true });
+    expect(lookup).not.toHaveBeenCalledWith("169.254.169.254", { all: true });
   });
 
   it("checks every hop, not just the first two", async () => {

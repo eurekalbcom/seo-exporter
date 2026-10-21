@@ -229,14 +229,46 @@ async function publicAddresses(hostname: string): Promise<LookupAddress[]> {
   return addresses;
 }
 
+function literalAddress(hostname: string): string | null {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    const inner = hostname.slice(1, -1);
+    return isIPv6(inner) ? inner : null;
+  }
+  return isIPv4(hostname) ? hostname : null;
+}
+
 /**
  * Pre-flight check with a clear error message. It applies the same rule as
  * pinnedLookup, so a name it accepts is not refused at connect time unless
  * its answer changed. It cannot stop DNS rebinding on its own (the connection
  * resolves the name again); pinnedLookup can.
+ *
+ * An IP literal is the address the socket dials, so DNS is not consulted.
  */
 async function assertPublicUrl(url: string): Promise<void> {
-  await publicAddresses(new URL(url).hostname);
+  const hostname = new URL(url).hostname;
+  const literal = literalAddress(hostname);
+  if (literal) {
+    if (isPrivateIp(literal)) throw new BlockedAddressError(hostname);
+    return;
+  }
+  await publicAddresses(hostname);
+}
+
+function crawlRequestUrl(raw: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`Unsupported URL: ${raw}`);
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new Error("Unsupported URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Unsupported URL: ${raw}`);
+  }
+  return parsed;
 }
 
 /**
@@ -617,14 +649,10 @@ async function fetchPublic(
 
   for (let redirects = 0; ; redirects++) {
     outer?.throwIfAborted();
-    // A URL that is not http(s), or whose host does not resolve or is
-    // private, fails here as a fetch error (a broken link), before robots.txt
-    // is consulted: there is no robots.txt to read for it.
-    if (!isHttpUrl(currentUrl)) throw new Error(`Unsupported URL: ${currentUrl}`);
-    await assertPublicUrl(currentUrl);
-    // The seed is checked at the API. Every later hop, and this one, is
-    // checked again so a redirect cannot leave CRAWL_ALLOWED_DOMAINS.
+    const parsed = crawlRequestUrl(currentUrl);
+    currentUrl = parsed.href;
     assertCrawlDomainAllowed(currentUrl);
+    await assertPublicUrl(currentUrl);
     await hooks.guard?.(currentUrl);
     outer?.throwIfAborted();
     const release = (await hooks.pace?.(currentUrl)) ?? (() => {});
@@ -643,6 +671,7 @@ async function fetchPublic(
     let res: Response;
     try {
       res = await fetch(currentUrl, {
+        method: "GET",
         headers,
         signal: outer ? AbortSignal.any([controller.signal, outer]) : controller.signal,
         redirect: "manual",
@@ -656,8 +685,15 @@ async function fetchPublic(
       throw err;
     }
 
-    const location =
-      res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    const headerLocation = res.headers.get("location");
+    const follow =
+      res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400);
+    if (res.type === "opaqueredirect" && !headerLocation) {
+      await res.body?.cancel().catch(() => {});
+      done();
+      throw new Error("Blocked opaque redirect");
+    }
+    const location = follow ? headerLocation : null;
     if (!location) {
       const base = priorMs;
       return {
