@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { decrypt } from "@/lib/encryption";
+import { redactError, redactUrl } from "./redact-url";
 import {
   aggregateWeekly,
   count,
@@ -80,27 +81,33 @@ async function bingGet<T>(
   params: Record<string, string> = {}
 ): Promise<T> {
   const query = new URLSearchParams({ ...params, apikey: apiKey });
-  const response = await fetch(`${BING_API_BASE}/${method}?${query}`, {
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  const body = await response.text();
+  const url = `${BING_API_BASE}/${method}?${query}`;
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const body = await response.text();
 
-  if (!response.ok) {
-    let detail = body.slice(0, 300);
-    try {
-      const parsed = JSON.parse(body) as { ErrorCode?: number; Message?: string };
-      if (parsed.ErrorCode !== undefined) {
-        detail = `ErrorCode ${parsed.ErrorCode}${
-          parsed.Message ? ` - ${parsed.Message}` : ""
-        }`;
+    if (!response.ok) {
+      let detail = redactUrl(body, apiKey).slice(0, 300);
+      try {
+        const parsed = JSON.parse(body) as { ErrorCode?: number; Message?: string };
+        if (parsed.ErrorCode !== undefined) {
+          detail = redactUrl(
+            `ErrorCode ${parsed.ErrorCode}${parsed.Message ? ` - ${parsed.Message}` : ""}`,
+            apiKey
+          ).slice(0, 300);
+        }
+      } catch {
+        // fall back to the raw body
       }
-    } catch {
-      // fall back to the raw body
+      throw new Error(`Bing ${method} failed: ${response.status} ${detail}`);
     }
-    throw new Error(`Bing ${method} failed: ${response.status} ${detail}`);
-  }
 
-  return (JSON.parse(body) as { d: T }).d;
+    return (JSON.parse(body) as { d: T }).d;
+  } catch (error) {
+    throw redactError(error, apiKey);
+  }
 }
 
 // ---------------------------------------------------------------------------
