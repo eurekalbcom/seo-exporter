@@ -47,3 +47,33 @@ export function assertCrawlDomainAllowed(domain: string, env: NodeJS.ProcessEnv 
   const ok = Boolean(host) && allowed.some((entry) => hostMatches(host, entry));
   if (!ok) throw new CrawlDomainDeniedError(domain);
 }
+
+export const LIVE_ORIGINS = ["https://bezkolejki.org", "https://eurekalb.com"] as const;
+
+export class LiveOriginDeniedError extends Error {
+  constructor(url: string) {
+    super(`Refusing fetch outside the live origins: ${url}`);
+    this.name = "LiveOriginDeniedError";
+  }
+}
+
+function liveFetchOrigins(): Set<string> {
+  const origins = new Set<string>(LIVE_ORIGINS);
+  for (const origin of LIVE_ORIGINS) {
+    origins.add(`https://www.${new URL(origin).hostname}`);
+  }
+  return origins;
+}
+
+/** https only, default port, exact origin, with an optional www host. */
+export function assertLiveFetchOrigin(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new LiveOriginDeniedError(url);
+  }
+  if (parsed.protocol !== "https:" || !liveFetchOrigins().has(parsed.origin)) {
+    throw new LiveOriginDeniedError(url);
+  }
+}

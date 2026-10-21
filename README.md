@@ -82,6 +82,41 @@ docker compose up --build
 
 Prometheus metrics are `GET /metrics`. The orchestrator schedule (Europe/Warsaw) is 03:00 gsc-sync, 04:00 crawl, 05:00 vitals, 06:00 analysis. Recommendations are stored as `proposed` and are not executed.
 
+### Read-only report for EUR-409
+
+The report command reads a Search Console CSV that you export by hand, crawls one allowlisted site, and writes `report.json` plus `report.md`. It does not call a Google API, and it does not log in. Approve and reject write one line each to a JSONL file. They do not rewrite earlier lines, and they do not change the site.
+
+Set `CRAWL_ALLOWED_DOMAINS` to the host you are auditing. An unset or empty value denies every host. Live crawl fetches only `https://bezkolejki.org` and `https://eurekalb.com`, sends `SEOAutopilotBot/0.1 (+https://eurekalb.com/bot)`, waits at least one second between requests, and uses GET. A POST, PUT, PATCH, or DELETE is refused before the request.
+
+```bash
+cd orchestrator
+npm ci
+export CRAWL_ALLOWED_DOMAINS=eurekalb.com
+
+npm run autopilot -- report \
+  --domain eurekalb.com \
+  --queries fixtures/autopilot/gsc-queries.csv \
+  --pages fixtures/autopilot/gsc-pages.csv \
+  --fixture fixtures/autopilot/site \
+  --out /tmp/seo-report
+
+# Copy an id from /tmp/seo-report/report.json, then:
+npm run autopilot -- approve <id> \
+  --report /tmp/seo-report/report.json \
+  --log /tmp/seo-report/decisions.jsonl \
+  --actor echo
+
+npm run autopilot -- reject <id> \
+  --report /tmp/seo-report/report.json \
+  --log /tmp/seo-report/decisions.jsonl
+```
+
+Pass `--live` to crawl the public site. The files in `fixtures/autopilot/sample/` were built from `fixtures/autopilot/site` and the two CSV files beside that directory.
+
+Each recommendation has `opis`, `uzasadnienie`, `dane`, `ryzyko`, `rollback`, and `status`. Status starts as `proposed`. The decision log is the record of `approved` or `rejected`.
+
+Search Console rows add four rules. Thresholds live in `orchestrator/src/autopilot/gsc-rules.ts`: striking-distance queries (position 4-20), CTR below the expected curve for that position, a query cluster whose path and h1 have no match, and a sitemap response other than HTTP 200. The sitemap row says to check the WAF and Googlebot reachability. It does not bypass the control.
+
 ```bash
 cd orchestrator
 npm ci

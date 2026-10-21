@@ -1,0 +1,16 @@
+{
+  "origin": "https://eurekalb.com",
+  "routes": {
+    "/robots.txt": { "status": 200, "file": "robots.txt", "contentType": "text/plain" },
+    "/sitemap.xml": { "status": 200, "file": "sitemap.xml", "contentType": "application/xml" },
+    "/": { "status": 200, "file": "index.html", "contentType": "text/html; charset=utf-8" },
+    "/about": { "status": 200, "file": "about.html", "contentType": "text/html" },
+    "/guides": { "status": 200, "file": "guides.html", "contentType": "text/html" },
+    "/blank": { "status": 200, "file": "blank.html", "contentType": "text/html" },
+    "/noindex": { "status": 200, "file": "noindex.html", "contentType": "text/html" },
+    "/missing": { "status": 404, "body": "missing", "contentType": "text/html" },
+    "/ghost": { "status": 404, "body": "ghost", "contentType": "text/html" },
+    "/old": { "status": 301, "location": "/about" },
+    "/private": { "status": 200, "body": "secret", "contentType": "text/html" }
+  }
+}

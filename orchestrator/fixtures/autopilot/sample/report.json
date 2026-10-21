@@ -1,0 +1,464 @@
+{
+  "generatedAt": "2026-01-15T05:00:00.000Z",
+  "domain": "eurekalb.com",
+  "mode": "fixture",
+  "recommendations": [
+    {
+      "id": "rec_00d7d9dd9d74",
+      "domain": "eurekalb.com",
+      "rule": "low-ctr-page",
+      "status": "proposed",
+      "opis": "Rewrite the title and description for https://example\\.com/",
+      "uzasadnienie": "The page has 300 impressions, CTR 0.6%, and average position 10.",
+      "dane": {
+        "page": "https://example.com/",
+        "clicks": 4,
+        "impressions": 300,
+        "ctr": 0.006,
+        "position": 10
+      },
+      "ryzyko": "A snippet change can lower clicks if the new text matches the query worse.",
+      "rollback": "Restore the previous title and meta description. No change has been applied."
+    },
+    {
+      "id": "rec_027ef1f3e7bd",
+      "domain": "eurekalb.com",
+      "rule": "ctr-below-expected-page",
+      "status": "proposed",
+      "opis": "Rewrite the title and meta description on https://example\\.com/.",
+      "uzasadnienie": "CTR is 0.6% at position 10. The curve for that position is about 1.5%.",
+      "dane": {
+        "page": "https://example.com/",
+        "clicks": 4,
+        "impressions": 300,
+        "ctr": 0.006,
+        "position": 10,
+        "expectedCtr": 0.015,
+        "maxCtrRatio": 0.5
+      },
+      "ryzyko": "A snippet that over-promises can earn the click and lose the visitor.",
+      "rollback": "Restore the previous title and meta description. No change has been applied."
+    },
+    {
+      "id": "rec_305eeda6e49c",
+      "domain": "eurekalb.com",
+      "rule": "striking-distance-query",
+      "status": "proposed",
+      "opis": "Suggest a title, h1, and on-page section for \"example query a\".",
+      "uzasadnienie": "The query is at position 7.5 with 250 impressions, inside the striking-distance band.",
+      "dane": {
+        "query": "example query a",
+        "clicks": 3,
+        "impressions": 250,
+        "ctr": 0.004,
+        "position": 7.5,
+        "page": null,
+        "title": null,
+        "h1": [],
+        "thresholds": {
+          "minPosition": 4,
+          "maxPosition": 20,
+          "minImpressions": 10
+        }
+      },
+      "ryzyko": "Changing the title, h1, or body can move rankings for other queries on the same URL.",
+      "rollback": "Restore the previous title, h1, and page text. No change has been applied."
+    },
+    {
+      "id": "rec_50dbe95dd2af",
+      "domain": "eurekalb.com",
+      "rule": "missing-h1",
+      "status": "proposed",
+      "opis": "Add one h1 on https://eurekalb.com/about",
+      "uzasadnienie": "The page has no h1, so the main heading is not marked up.",
+      "dane": {
+        "url": "https://eurekalb.com/about",
+        "h1": []
+      },
+      "ryzyko": "Changing the visible heading changes the page for every visitor.",
+      "rollback": "Restore the previous heading. No change has been applied."
+    },
+    {
+      "id": "rec_663bcedb74cd",
+      "domain": "eurekalb.com",
+      "rule": "multiple-h1",
+      "status": "proposed",
+      "opis": "Keep a single h1 on https://eurekalb.com/guides",
+      "uzasadnienie": "The page has 2 h1 elements.",
+      "dane": {
+        "url": "https://eurekalb.com/guides",
+        "h1": [
+          "First guide",
+          "Second guide"
+        ]
+      },
+      "ryzyko": "Demoting a heading changes the outline visitors and parsers see.",
+      "rollback": "Restore the previous headings. No change has been applied."
+    },
+    {
+      "id": "rec_838144185c71",
+      "domain": "eurekalb.com",
+      "rule": "redirect",
+      "status": "proposed",
+      "opis": "Replace the redirect from https://eurekalb.com/old to https://eurekalb.com/about with a direct URL",
+      "uzasadnienie": "The crawler followed HTTP 301 from https://eurekalb.com/old to https://eurekalb.com/about.",
+      "dane": {
+        "from": "https://eurekalb.com/old",
+        "to": "https://eurekalb.com/about",
+        "status": 301
+      },
+      "ryzyko": "Removing a redirect breaks visitors and tools that still use the old URL.",
+      "rollback": "Restore the HTTP 301 redirect from https://eurekalb.com/old to https://eurekalb.com/about. No change has been applied."
+    },
+    {
+      "id": "rec_930ec698bbf4",
+      "domain": "eurekalb.com",
+      "rule": "missing-title",
+      "status": "proposed",
+      "opis": "Add a title on https://eurekalb.com/blank",
+      "uzasadnienie": "The HTML title is empty, so search results have nothing specific to show.",
+      "dane": {
+        "url": "https://eurekalb.com/blank",
+        "title": null
+      },
+      "ryzyko": "A new title changes the snippet searchers see.",
+      "rollback": "Restore the previous title element. No change has been applied."
+    },
+    {
+      "id": "rec_9358c5a2b866",
+      "domain": "eurekalb.com",
+      "rule": "ctr-below-expected-query",
+      "status": "proposed",
+      "opis": "Rewrite the title and meta description for the query \"example query a\".",
+      "uzasadnienie": "CTR is 0.4% at position 7.5. The curve for that position is about 2.5%.",
+      "dane": {
+        "query": "example query a",
+        "clicks": 3,
+        "impressions": 250,
+        "ctr": 0.004,
+        "position": 7.5,
+        "expectedCtr": 0.025,
+        "maxCtrRatio": 0.5
+      },
+      "ryzyko": "A snippet that over-promises can earn the click and lose the visitor.",
+      "rollback": "Restore the previous title and meta description. No change has been applied."
+    },
+    {
+      "id": "rec_94120c6aa582",
+      "domain": "eurekalb.com",
+      "rule": "sitemap-not-ok",
+      "status": "proposed",
+      "opis": "Return HTTP 200 for sitemap URL https://eurekalb.com/ghost",
+      "uzasadnienie": "The sitemap lists this URL, and the crawl did not finish on HTTP 200.",
+      "dane": {
+        "url": "https://eurekalb.com/ghost",
+        "status": 404
+      },
+      "ryzyko": "Changing the sitemap or the URL can remove a URL search engines already know.",
+      "rollback": "Restore the previous sitemap entry and the previous response. No change has been applied."
+    },
+    {
+      "id": "rec_9a245927f248",
+      "domain": "eurekalb.com",
+      "rule": "missing-canonical",
+      "status": "proposed",
+      "opis": "Add a canonical link on https://eurekalb.com/about",
+      "uzasadnienie": "The page does not declare a canonical URL.",
+      "dane": {
+        "url": "https://eurekalb.com/about",
+        "canonical": null
+      },
+      "ryzyko": "A wrong canonical can drop the URL from search results.",
+      "rollback": "Remove the new canonical or restore the previous one. No change has been applied."
+    },
+    {
+      "id": "rec_d99048d59b72",
+      "domain": "eurekalb.com",
+      "rule": "low-ctr-query",
+      "status": "proposed",
+      "opis": "Rewrite the title and description for the query \"example query a\"",
+      "uzasadnienie": "The query has 250 impressions, CTR 0.4%, and average position 7.5.",
+      "dane": {
+        "query": "example query a",
+        "clicks": 3,
+        "impressions": 250,
+        "ctr": 0.004,
+        "position": 7.5
+      },
+      "ryzyko": "A snippet change can lower clicks if the new text matches the query worse.",
+      "rollback": "Restore the previous title and meta description. No change has been applied."
+    },
+    {
+      "id": "rec_e04567e45c66",
+      "domain": "eurekalb.com",
+      "rule": "missing-meta-description",
+      "status": "proposed",
+      "opis": "Add a meta description on https://eurekalb.com/about",
+      "uzasadnienie": "The meta description is missing, so the result snippet is chosen from page text.",
+      "dane": {
+        "url": "https://eurekalb.com/about",
+        "metaDescription": null
+      },
+      "ryzyko": "A description that oversells the page can lower clicks after people land.",
+      "rollback": "Restore the previous meta description. No change has been applied."
+    },
+    {
+      "id": "rec_f2f2e8208c42",
+      "domain": "eurekalb.com",
+      "rule": "broken-link",
+      "status": "proposed",
+      "opis": "Fix the broken link from https://eurekalb.com/ to https://eurekalb.com/missing",
+      "uzasadnienie": "https://eurekalb.com/missing responded with HTTP 404.",
+      "dane": {
+        "from": "https://eurekalb.com/",
+        "to": "https://eurekalb.com/missing",
+        "status": 404
+      },
+      "ryzyko": "Replacing the link sends visitors to a different URL.",
+      "rollback": "Point the link back at https://eurekalb.com/missing. No change has been applied."
+    },
+    {
+      "id": "rec_fa39d0eff330",
+      "domain": "eurekalb.com",
+      "rule": "noindex",
+      "status": "proposed",
+      "opis": "Remove noindex from https://eurekalb.com/noindex",
+      "uzasadnienie": "The page asks crawlers not to index it.",
+      "dane": {
+        "url": "https://eurekalb.com/noindex",
+        "noindex": true
+      },
+      "ryzyko": "Removing noindex can make the URL eligible for search results.",
+      "rollback": "Put the noindex robots directive back. No change has been applied."
+    }
+  ],
+  "crawl": [
+    {
+      "origin": "https://eurekalb.com",
+      "robotsStatus": 200,
+      "robotsOutcome": "rules",
+      "crawlDelaySeconds": null,
+      "sitemapUrls": [
+        "https://eurekalb.com/",
+        "https://eurekalb.com/about",
+        "https://eurekalb.com/guides",
+        "https://eurekalb.com/blank",
+        "https://eurekalb.com/noindex",
+        "https://eurekalb.com/old",
+        "https://eurekalb.com/ghost"
+      ],
+      "pages": [
+        {
+          "url": "https://eurekalb.com/",
+          "status": 200,
+          "contentType": "text/html; charset=utf-8",
+          "title": "Eureka Labs",
+          "metaDescription": "Eureka Labs builds software for clinics.",
+          "canonical": "https://eurekalb.com/",
+          "h1": [
+            "Eureka Labs"
+          ],
+          "noindex": false,
+          "links": [
+            "https://eurekalb.com/about",
+            "https://eurekalb.com/guides",
+            "https://eurekalb.com/blank",
+            "https://eurekalb.com/noindex",
+            "https://eurekalb.com/missing",
+            "https://eurekalb.com/private",
+            "https://evil.example/phish"
+          ],
+          "parsedHtml": true
+        },
+        {
+          "url": "https://eurekalb.com/about",
+          "status": 200,
+          "contentType": "text/html",
+          "title": "About",
+          "metaDescription": null,
+          "canonical": null,
+          "h1": [],
+          "noindex": false,
+          "links": [],
+          "parsedHtml": true
+        },
+        {
+          "url": "https://eurekalb.com/guides",
+          "status": 200,
+          "contentType": "text/html",
+          "title": "Guides",
+          "metaDescription": "Guides for visitors.",
+          "canonical": "https://eurekalb.com/guides",
+          "h1": [
+            "First guide",
+            "Second guide"
+          ],
+          "noindex": false,
+          "links": [],
+          "parsedHtml": true
+        },
+        {
+          "url": "https://eurekalb.com/blank",
+          "status": 200,
+          "contentType": "text/html",
+          "title": null,
+          "metaDescription": "A page with a blank title.",
+          "canonical": "https://eurekalb.com/blank",
+          "h1": [
+            "Blank title"
+          ],
+          "noindex": false,
+          "links": [],
+          "parsedHtml": true
+        },
+        {
+          "url": "https://eurekalb.com/noindex",
+          "status": 200,
+          "contentType": "text/html",
+          "title": "Hidden",
+          "metaDescription": "Hidden page.",
+          "canonical": "https://eurekalb.com/noindex",
+          "h1": [
+            "Hidden"
+          ],
+          "noindex": true,
+          "links": [],
+          "parsedHtml": true
+        },
+        {
+          "url": "https://eurekalb.com/ghost",
+          "status": 404,
+          "contentType": "text/html",
+          "title": null,
+          "metaDescription": null,
+          "canonical": null,
+          "h1": [],
+          "noindex": false,
+          "links": [],
+          "parsedHtml": false
+        },
+        {
+          "url": "https://eurekalb.com/missing",
+          "status": 404,
+          "contentType": "text/html",
+          "title": null,
+          "metaDescription": null,
+          "canonical": null,
+          "h1": [],
+          "noindex": false,
+          "links": [],
+          "parsedHtml": false
+        }
+      ],
+      "redirects": [
+        {
+          "from": "https://eurekalb.com/old",
+          "to": "https://eurekalb.com/about",
+          "status": 301
+        }
+      ],
+      "blockedByRobots": [
+        "https://eurekalb.com/private"
+      ],
+      "brokenLinks": [
+        {
+          "from": "https://eurekalb.com/",
+          "to": "https://eurekalb.com/missing",
+          "status": 404
+        }
+      ],
+      "skippedOffHost": [
+        "https://evil.example/phish"
+      ],
+      "requests": [
+        {
+          "url": "https://eurekalb.com/robots.txt",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/sitemap.xml",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/about",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/guides",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/blank",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/noindex",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/old",
+          "method": "GET",
+          "status": 301
+        },
+        {
+          "url": "https://eurekalb.com/about",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://eurekalb.com/ghost",
+          "method": "GET",
+          "status": 404
+        },
+        {
+          "url": "https://eurekalb.com/missing",
+          "method": "GET",
+          "status": 404
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query": "example query a",
+      "clicks": 3,
+      "impressions": 250,
+      "ctr": 0.004,
+      "position": 7.5
+    },
+    {
+      "query": "example query b",
+      "clicks": 40,
+      "impressions": 90,
+      "ctr": 0.7,
+      "position": 1.5
+    }
+  ],
+  "pages": [
+    {
+      "page": "https://example.com/",
+      "clicks": 4,
+      "impressions": 300,
+      "ctr": 0.006,
+      "position": 10
+    },
+    {
+      "page": "https://example.com/about",
+      "clicks": 20,
+      "impressions": 40,
+      "ctr": 0.4,
+      "position": 2
+    }
+  ]
+}
