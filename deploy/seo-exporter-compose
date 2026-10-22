@@ -1,0 +1,171 @@
+#!/bin/bash
+# Forced command for the non-root seo-deploy user on witold216.
+# Installed at /usr/local/sbin/seo-exporter-compose. No sudo.
+# SSH_ORIGINAL_COMMAND may only be:
+#   docker compose pull
+#   docker compose up -d
+#   docker compose ps
+set -euo pipefail
+umask 077
+unset CDPATH
+unset SEO_COMPOSE_ROOT
+unset SEO_DOCKER_SOCKET
+unset DOCKER_HOST
+unset DOCKER_CONTEXT
+
+ROOT=/srv/seo-exporter
+cd -- "$ROOT"
+
+uid=$(id -u)
+if [[ "$uid" -eq 0 ]]; then
+  printf '%s\n' "refusing root" >&2
+  exit 1
+fi
+
+sock="/run/user/${uid}/docker.sock"
+if [[ ! -S "$sock" ]]; then
+  printf '%s\n' "rootless docker socket missing" >&2
+  exit 1
+fi
+resolved=$(readlink -f "$sock")
+case "$resolved" in
+  /var/run/docker.sock | /run/docker.sock)
+    printf '%s\n' "system docker socket refused" >&2
+    exit 1
+    ;;
+esac
+export DOCKER_HOST="unix://${sock}"
+export PATH="/usr/local/bin:/usr/bin:/bin"
+
+cmd=${SSH_ORIGINAL_COMMAND-}
+case "$cmd" in
+  "docker compose pull" | "docker compose up -d" | "docker compose ps") ;;
+  *)
+    printf '%s\n' "command refused" >&2
+    exit 1
+    ;;
+esac
+
+image_re='^SEO_EXPORTER_IMAGE=[a-z0-9]+([.][a-z0-9]+)+(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
+
+validate_env() {
+  local file=$1
+  local key count
+  count=$(grep -cE '^SEO_EXPORTER_IMAGE=' "$file" || true)
+  if [[ "$count" -ne 1 ]]; then
+    printf '%s\n' "env rejected" >&2
+    return 1
+  fi
+  if ! grep -Eq "$image_re" "$file"; then
+    printf '%s\n' "env rejected" >&2
+    return 1
+  fi
+  if ! grep -Eq '^SEO_COMPOSE_SHA256=[0-9a-f]{64}$' "$file"; then
+    printf '%s\n' "env rejected" >&2
+    return 1
+  fi
+  for key in SEO_EXPORTER_GSC_SITE SEO_EXPORTER_BING_SITE SEO_EXPORTER_GSC_JSON SEO_EXPORTER_BING_JSON; do
+    if ! grep -Eq "^${key}=.+" "$file"; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+  done
+}
+
+compose_allowed() {
+  local file=${ROOT}/docker-compose.yml
+  if [[ ! -f "$file" ]]; then
+    printf '%s\n' "compose refused" >&2
+    return 1
+  fi
+  if grep -Eq 'ports:|docker\.sock|bezkolejki|privileged:' "$file"; then
+    printf '%s\n' "compose refused" >&2
+    return 1
+  fi
+}
+
+compose_hash_ok() {
+  local file=$1
+  local expected actual
+  expected=$(awk -F= '/^SEO_COMPOSE_SHA256=/ {print substr($0, index($0, "=") + 1)}' "$file")
+  actual=$(sha256sum "${ROOT}/docker-compose.yml" | awk '{print $1}')
+  if [[ "$expected" != "$actual" ]]; then
+    printf '%s\n' "compose hash refused" >&2
+    return 1
+  fi
+}
+
+restore_env() {
+  rm -f -- "${ROOT}/.env"
+  if [[ -f "${ROOT}/.env.prev" ]]; then
+    mv -f -- "${ROOT}/.env.prev" "${ROOT}/.env"
+    chmod 600 "${ROOT}/.env"
+  fi
+}
+
+install_env() {
+  local tmp=$1
+  if ! validate_env "$tmp"; then
+    rm -f -- "$tmp"
+    exit 1
+  fi
+  if ! compose_allowed || ! compose_hash_ok "$tmp"; then
+    rm -f -- "$tmp"
+    exit 1
+  fi
+  if [[ -f "${ROOT}/.env" ]]; then
+    mv -f -- "${ROOT}/.env" "${ROOT}/.env.prev"
+  fi
+  chmod 600 "$tmp"
+  mv -f -- "$tmp" "${ROOT}/.env"
+  chmod 600 "${ROOT}/.env"
+  if ! docker compose pull; then
+    restore_env
+    exit 1
+  fi
+  rm -f -- "${ROOT}/.env.prev"
+}
+
+tmp=$(mktemp "${ROOT}/.env.XXXXXX")
+cat >"$tmp"
+if [[ "$cmd" != "docker compose pull" ]]; then
+  if [[ -s "$tmp" ]]; then
+    rm -f -- "$tmp"
+    printf '%s\n' "command refused" >&2
+    exit 1
+  fi
+  rm -f -- "$tmp"
+  if [[ ! -f "${ROOT}/.env" ]]; then
+    printf '%s\n' "env file missing" >&2
+    exit 1
+  fi
+  mode=$(stat -c '%a' "${ROOT}/.env")
+  if [[ "$mode" != "600" ]]; then
+    printf '%s\n' "env file mode refused" >&2
+    exit 1
+  fi
+  if ! compose_allowed || ! compose_hash_ok "${ROOT}/.env"; then
+    exit 1
+  fi
+else
+  if [[ ! -s "$tmp" ]]; then
+    rm -f -- "$tmp"
+    printf '%s\n' "env file missing" >&2
+    exit 1
+  fi
+  install_env "$tmp"
+fi
+
+case "$cmd" in
+  "docker compose pull") ;;
+  "docker compose up -d")
+    exec docker compose up -d
+    ;;
+  "docker compose ps")
+    exec docker compose ps
+    ;;
+  *)
+    printf '%s\n' "command refused" >&2
+    exit 1
+    ;;
+esac

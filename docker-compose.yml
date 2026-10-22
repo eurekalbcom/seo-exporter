@@ -1,0 +1,36 @@
+# Dedicated compose project for the read-only SEO exporter.
+# The bridge is not attached to any other project. Provider APIs need egress,
+# so the network is not internal. Host ports are not published.
+name: seo-exporter
+
+services:
+  seo-exporter:
+    image: ${SEO_EXPORTER_IMAGE:?SEO_EXPORTER_IMAGE must be name@sha256:digest}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - seo-exporter_net
+    expose:
+      - "9108"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      CREDENTIALS_DIRECTORY: /run/credentials/seo-exporter
+      SEO_EXPORTER_BIND: 127.0.0.1
+      SEO_EXPORTER_STATE_DIR: /var/lib/seo-exporter
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    tmpfs:
+      - /run/credentials:uid=10001,gid=10001,mode=0750
+      - /var/lib/seo-exporter:uid=10001,gid=10001,mode=0700
+      - /tmp:uid=10001,gid=10001,mode=1770
+    restart: unless-stopped
+
+networks:
+  seo-exporter_net:
+    name: seo-exporter_net
+    driver: bridge

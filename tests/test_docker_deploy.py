@@ -1,0 +1,510 @@
+"""Contracts for the Docker deploy of the read-only exporter."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import socket
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from deploy.docker_entrypoint import runtime_env, write_credentials
+from deploy.envfile import build_from_environ, normalize_image, write_env_file
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+_IMAGE = "ghcr.io/example/seo-exporter@sha256:" + ("ab" * 32)
+_EXPORTER_SHA256 = {
+    "pyproject.toml": "772940f0678f3f43d58f6577737111c87ce05a5c49baf22b595519ddfc6bfeab",
+    "requirements-dev.txt": "468b862d1a6f7bb772b5e1d4c8210331d435d0a293800befbc452d9081a94ef8",
+    "seo_exporter/__init__.py": "d7e2241973d3870ad6be6aeb5ad638a0cd182efa371aa0653abfda0d426640a4",
+    "seo_exporter/__main__.py": "990b421ff805f37e7b633f81853fbb1ea0ef3d3f24cbca3a59d00c112e2892ae",
+    "seo_exporter/bing.py": "4498f5a7089c76e293657400e4f2bee2e5de69e2bc5eec03d4da2de82587004b",
+    "seo_exporter/credentials.py": "afed3712366e15fe34dffe70e2ea77437691b419bcea6be73b8e4d97e4afc3f8",
+    "seo_exporter/gsc.py": "1d75e8844e4695a8a30e6111b0ff42c5cf248ff58e5a6c114732de0400b4f407",
+    "seo_exporter/http_client.py": "37b1c5ad045037bca83c6e5c027ebb75b574f05fa31686a5ebfe75b0c612c8d2",
+    "seo_exporter/logging_redact.py": "2dadff7b6a06b6c34b5f49435050ac600f8c62deb3d369759778767ffca14a92",
+    "seo_exporter/metrics.py": "de14998e149cce9afe55f0740f9d6c9681140ec294874abda5acab575792e011",
+    "seo_exporter/oauth.py": "17e18af0602df864b5bd79cc3ec68d648fd87b127551bcfd9fd2f60a1bb5a9e0",
+    "seo_exporter/providers.py": "e21b01d807c56ebc07da229a242b694aa6b76f768f23b56f3d30c761c9b4f259",
+    "seo_exporter/refresh_store.py": "c4c79bd44151dc947b084da8b610a34f07c6a19643c7a9b5518c778777ee6f34",
+    "seo_exporter/server.py": "211072c87985e97f30551572ba75ba49b79752828f150a88841dce6ea4c39074",
+    "seo_exporter/service.py": "861e9eb2941d0846a1e9891b74ee6f783d6c18fe44e501e297f89b3b4ff71005",
+    "seo_exporter/settings.py": "743c688aa74205b4802a52c2dc26012b44f86f83c2a9472d4cd6d43b014ae31e",
+    "tests/test_credentials.py": "f3bdf98a132e7047a9135002d27c272585346dbfaf1e54f40ec510a783224516",
+    "tests/test_oauth_http.py": "92c669b9bc7b0c8d96a7b8495479345663967fe9aef3456caa5afc6e5828bc80",
+    "tests/test_providers.py": "ef298763de78232257a0a37a7a28a409fd347f2010e1a23b525712cec619dcb6",
+    "tests/test_service.py": "78c6db76158cad08512f2a9dd4eb9d09fecb9cef6e0a6ae274ded0e2e6c2460c",
+}
+
+
+def _credential(secret: str) -> str:
+    return json.dumps(
+        {
+            "client_id": "client-id-test",
+            "client_secret": secret,
+            "refresh_token": "refresh-token",
+        },
+        separators=(",", ":"),
+    )
+
+
+def _base_env(tmp_path: Path | None = None) -> dict[str, str]:
+    env = {
+        "IMAGE_REPO": "ghcr.io/example/seo-exporter",
+        "IMAGE_DIGEST": "sha256:" + ("ab" * 32),
+        "GSC_JSON": _credential("gsc-secret-marker"),
+        "BING_JSON": _credential("bing-secret-marker"),
+        "GSC_SITE": "sc-domain:example.com",
+        "BING_SITE": "https://example.invalid/",
+        "COMPOSE_FILE": str(ROOT / "docker-compose.yml"),
+    }
+    if tmp_path is not None:
+        env["IMAGE_DIGEST_FILE"] = str(tmp_path / "missing-digest")
+    return env
+
+
+def test_exporter_bytes_match_efe4041d() -> None:
+    for relative, expected in _EXPORTER_SHA256.items():
+        digest = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+        assert digest == expected, relative
+
+
+def test_rejected_root_install_files_are_absent() -> None:
+    for name in (
+        "deploy/seo-exporter.service",
+        "deploy/sudoers.example",
+        "deploy/install.sh",
+        "deploy/ssh_install.sh",
+    ):
+        assert not (ROOT / name).exists()
+
+
+def test_image_reference_must_be_a_digest() -> None:
+    assert normalize_image("ghcr.io/example/seo-exporter", "sha256:" + ("ab" * 32)) == _IMAGE
+    full = normalize_image("ghcr.io/example/seo-exporter", _IMAGE)
+    assert full == _IMAGE
+    with pytest.raises(ValueError, match="image digest rejected"):
+        normalize_image("ghcr.io/example/seo-exporter", "latest")
+    with pytest.raises(ValueError, match="image digest rejected"):
+        normalize_image("ghcr.io/example/seo-exporter", "ghcr.io/other/seo-exporter@" + "sha256:" + ("ab" * 32))
+
+
+def test_envfile_mode_and_rejection(tmp_path: Path) -> None:
+    text = build_from_environ(_base_env())
+    assert "gsc-secret-marker" in text
+    assert "@sha256:" in text
+    path = tmp_path / "env"
+    write_env_file(path, text)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    rejected = _base_env()
+    rejected["GSC_JSON"] = "not-json-secret"
+    with pytest.raises(ValueError, match="GSC_JSON rejected") as caught:
+        build_from_environ(rejected)
+    assert "not-json-secret" not in str(caught.value)
+    missing = _base_env()
+    missing["BING_JSON"] = " "
+    with pytest.raises(ValueError, match="BING_JSON missing"):
+        build_from_environ(missing)
+
+
+def test_envfile_cli_does_not_echo(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env.update(_base_env())
+    env["GSC_JSON"] = "not-json-secret"
+    completed = subprocess.run(
+        [sys.executable, "-m", "deploy.envfile", "check"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    assert "not-json-secret" not in completed.stdout
+    assert "not-json-secret" not in completed.stderr
+    assert "gsc-secret-marker" not in completed.stderr
+    destination = tmp_path / "out.env"
+    env["GSC_JSON"] = _credential("gsc-secret-marker")
+    written = subprocess.run(
+        [sys.executable, "-m", "deploy.envfile", "write", str(destination)],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert written.returncode == 0, written.stderr
+    assert "gsc-secret-marker" not in written.stdout
+    assert "gsc-secret-marker" not in written.stderr
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+
+def test_entrypoint_drops_secrets_and_forces_bind(tmp_path: Path) -> None:
+    source = {
+        "SEO_EXPORTER_GSC_JSON": _credential("gsc-secret-marker"),
+        "SEO_EXPORTER_BING_JSON": _credential("bing-secret-marker"),
+        "SEO_EXPORTER_BIND": "0.0.0.0",
+        "SEO_EXPORTER_STATE_DIR": "/tmp/elsewhere",
+        "SEO_EXPORTER_GSC_SITE": "sc-domain:example.com",
+        "PATH": "/usr/bin",
+    }
+    write_credentials(source, tmp_path)
+    body = (tmp_path / "gsc.json").read_text(encoding="utf-8")
+    assert "gsc-secret-marker" in body
+    assert stat.S_IMODE((tmp_path / "gsc.json").stat().st_mode) == 0o400
+    cleaned = runtime_env(source)
+    assert "gsc-secret-marker" not in cleaned.values()
+    assert "SEO_EXPORTER_GSC_JSON" not in cleaned
+    assert cleaned["SEO_EXPORTER_BIND"] == "127.0.0.1"
+    assert cleaned["SEO_EXPORTER_STATE_DIR"] == "/var/lib/seo-exporter"
+    assert cleaned["CREDENTIALS_DIRECTORY"] == "/run/credentials/seo-exporter"
+    assert cleaned["SEO_EXPORTER_GSC_SITE"] == "sc-domain:example.com"
+
+
+def test_compose_file_matches_ciso_rules() -> None:
+    text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "cap_drop: [ALL]" in text
+    assert "read_only: true" in text
+    assert "no-new-privileges:true" in text
+    assert "name: seo-exporter_net" in text
+    assert "expose:" in text
+    assert "ports:" not in text
+    assert "docker.sock" not in text
+    assert "bezkolejki" not in text
+    assert "privileged:" not in text
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "USER 10001:10001" in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert "@sha256:9b98a8d37794ca093ba8d5afe1ffac52f5a15168b9b4e67594d86c20e14fa681" in dockerfile
+    assert "bezkolejki" not in dockerfile
+    assert "docker.sock" not in dockerfile
+
+
+def test_workflow_contract() -> None:
+    deploy = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in deploy
+    assert "environment: seo-readonly" in deploy
+    assert "persist-credentials: false" in deploy
+    assert "bash deploy/sha_guard.sh" in deploy
+    assert "secrets.EUK_SSH_SEO_DEPLOY_W216" in deploy
+    assert "EUK_SSH_SEO_DEPLOY_V8QX" not in deploy
+    assert "HOLD guard (fail-closed)" in deploy
+    assert "set -x" not in deploy
+    on_block = deploy.split("jobs:", 1)[0]
+    assert re.search(r"^\s*push:", on_block, flags=re.MULTILINE) is None
+    for use in re.findall(r"^\s*uses:\s*(\S+)\s*$", deploy, flags=re.MULTILINE):
+        action, pin = use.split("@", 1)
+        assert action in {"actions/checkout", "tailscale/github-action"}
+        assert _SHA.fullmatch(pin)
+    readme = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
+    assert 'command="/usr/local/sbin/seo-exporter-compose"' in readme
+    assert "EUK_SSH_SEO_DEPLOY_V8QX" in readme
+    assert "witold216" in readme
+    assert "previous digest" in readme or "previous image digest" in readme
+    assert "systemd" in readme.lower() or "Rejected" in readme
+
+
+def test_secret_expressions_stay_in_env_or_with() -> None:
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if "${{ secrets." not in line and "toJSON(secrets." not in line:
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            parent = None
+            for cursor in range(index - 1, -1, -1):
+                stripped = lines[cursor].strip()
+                if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+                    continue
+                if ":" not in stripped:
+                    continue
+                key = stripped.split(":", 1)[0].strip()
+                if not key or " " in key or key.startswith("${{"):
+                    continue
+                if len(lines[cursor]) - len(lines[cursor].lstrip(" ")) < indent:
+                    parent = key
+                    break
+            assert parent in {"env", "with"}, f"{path}:{index + 1} under {parent!r}"
+
+
+def test_check_workflows_script() -> None:
+    completed = subprocess.run(
+        ["bash", "deploy/check_workflows.sh"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_sha_guard(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        completed = subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=test", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    git("init", "-b", "main")
+    (repo / "file").write_text("one\n", encoding="utf-8")
+    git("add", "file")
+    git("commit", "-m", "one")
+    main_sha = git("rev-parse", "HEAD")
+    env = os.environ.copy()
+    env["DEPLOY_SHA"] = main_sha
+    ok = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "sha_guard.sh")],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert ok.returncode == 0, ok.stderr
+    env["DEPLOY_SHA"] = main_sha[:12]
+    short = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "sha_guard.sh")],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert short.returncode == 1
+    assert "sha-guard: refuse" in short.stderr
+    git("checkout", "-b", "side")
+    (repo / "file").write_text("two\n", encoding="utf-8")
+    git("add", "file")
+    git("commit", "-m", "two")
+    side_sha = git("rev-parse", "HEAD")
+    git("checkout", "main")
+    env["DEPLOY_SHA"] = side_sha
+    refused = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "sha_guard.sh")],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert refused.returncode == 1
+    assert side_sha not in refused.stdout
+
+
+def _run_ssh(tmp_path: Path, updates: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    marker = tmp_path / "ssh-invoked"
+    argv_path = tmp_path / "ssh-argv"
+    stdin_path = tmp_path / "ssh-stdin"
+    ssh = bin_dir / "ssh"
+    ssh.write_text(
+        "#!/bin/sh\n"
+        'touch "$SSH_MARKER"\n'
+        'printf "%s\\n" "$*" >> "$SSH_ARGV"\n'
+        'printf "\\n--STDIN--\\n" >> "$SSH_STDIN"\n'
+        'cat >> "$SSH_STDIN"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["TMPDIR"] = str(runner)
+    env["SSH_MARKER"] = str(marker)
+    env["SSH_ARGV"] = str(argv_path)
+    env["SSH_STDIN"] = str(stdin_path)
+    env.update(_base_env())
+    env["SEO_TARGET_HOST"] = "target.internal"
+    env["SEO_TARGET_HOSTKEY"] = "target.internal ssh-ed25519 AAAAC3TEST"
+    env["SSH_KEY"] = "deploy-key-material\n"
+    env.update(updates)
+    return subprocess.run(
+        ["bash", "deploy/ssh_deploy.sh"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_ssh_deploy_reaches_host_only_with_secrets(tmp_path: Path) -> None:
+    completed = _run_ssh(tmp_path, {})
+    assert completed.returncode == 0, completed.stderr
+    assert "gsc-secret-marker" not in completed.stdout
+    assert "gsc-secret-marker" not in completed.stderr
+    argv = (tmp_path / "ssh-argv").read_text(encoding="utf-8")
+    stdin = (tmp_path / "ssh-stdin").read_text(encoding="utf-8")
+    assert "StrictHostKeyChecking=yes" in argv
+    assert "seo-deploy@target.internal" in argv
+    assert "docker compose pull" in argv
+    assert "docker compose up -d" in argv
+    assert "docker compose ps" in argv
+    assert argv.index("docker compose pull") < argv.index("docker compose up -d")
+    assert "gsc-secret-marker" not in argv
+    assert "bing-secret-marker" not in argv
+    assert "deploy-key-material" not in argv
+    assert "gsc-secret-marker" in stdin
+    assert list((tmp_path / "runner").iterdir()) == []
+
+
+def test_ssh_deploy_fails_closed_before_ssh(tmp_path: Path) -> None:
+    completed = _run_ssh(tmp_path, {"GSC_JSON": ""})
+    assert completed.returncode != 0
+    assert "GSC_JSON missing" in completed.stderr
+    assert "gsc-secret-marker" not in completed.stderr
+    assert not (tmp_path / "ssh-invoked").exists()
+    assert list((tmp_path / "runner").iterdir()) == []
+
+
+def _wrapper(root: Path, socket_path: Path, bin_dir: Path) -> Path:
+    text = (ROOT / "deploy" / "seo-exporter-compose").read_text(encoding="utf-8")
+    text = text.replace("ROOT=/srv/seo-exporter", f"ROOT={root}")
+    text = text.replace('sock="/run/user/${uid}/docker.sock"', f'sock="{socket_path}"')
+    text = text.replace(
+        'export PATH="/usr/local/bin:/usr/bin:/bin"',
+        f'export PATH="{bin_dir}:/usr/local/bin:/usr/bin:/bin"',
+    )
+    path = root / "wrapper"
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _listen(path: Path) -> socket.socket:
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(path))
+    server.listen(1)
+    return server
+
+
+def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) -> None:
+    root = tmp_path / "srv"
+    root.mkdir()
+    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
+    (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    env_text = "\n".join(
+        (
+            f"SEO_EXPORTER_IMAGE={_IMAGE}",
+            "SEO_EXPORTER_GSC_SITE='sc-domain:example.com'",
+            "SEO_EXPORTER_BING_SITE='https://example.invalid/'",
+            f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
+            f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
+            f"SEO_COMPOSE_SHA256={compose_sha}",
+            "",
+        )
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "docker-log"
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
+        'if [ "${DOCKER_FAIL:-0}" = 1 ]; then exit 1; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    socket_path = tmp_path / "docker.sock"
+    listener = _listen(socket_path)
+    try:
+        wrapper = _wrapper(root, socket_path, bin_dir)
+        base = os.environ.copy()
+        base["PATH"] = f"{bin_dir}{os.pathsep}{base.get('PATH', '')}"
+        base["DOCKER_LOG"] = str(log)
+        pulled = subprocess.run(
+            ["bash", str(wrapper)],
+            input=env_text,
+            env={**base, "SSH_ORIGINAL_COMMAND": "docker compose pull"},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert pulled.returncode == 0, pulled.stderr
+        assert "gsc-secret-marker" not in pulled.stderr
+        assert stat.S_IMODE((root / ".env").stat().st_mode) == 0o600
+        assert "gsc-secret-marker" in (root / ".env").read_text(encoding="utf-8")
+        assert "compose pull" in log.read_text(encoding="utf-8")
+        assert "gsc-secret-marker" not in log.read_text(encoding="utf-8")
+        refused = subprocess.run(
+            ["bash", str(wrapper)],
+            input="",
+            env={**base, "SSH_ORIGINAL_COMMAND": "bash"},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert refused.returncode == 1
+        assert "command refused" in refused.stderr
+    finally:
+        listener.close()
+
+
+def test_forced_command_restores_env_when_pull_fails(tmp_path: Path) -> None:
+    root = tmp_path / "srv"
+    root.mkdir()
+    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
+    (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    previous = root / ".env"
+    previous.write_text("previous-env\n", encoding="utf-8")
+    previous.chmod(0o600)
+    env_text = "\n".join(
+        (
+            f"SEO_EXPORTER_IMAGE={_IMAGE}",
+            "SEO_EXPORTER_GSC_SITE='sc-domain:example.com'",
+            "SEO_EXPORTER_BING_SITE='https://example.invalid/'",
+            f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
+            f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
+            f"SEO_COMPOSE_SHA256={compose_sha}",
+            "",
+        )
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    docker.chmod(0o755)
+    socket_path = tmp_path / "docker.sock"
+    listener = _listen(socket_path)
+    try:
+        wrapper = _wrapper(root, socket_path, bin_dir)
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        env["SSH_ORIGINAL_COMMAND"] = "docker compose pull"
+        failed = subprocess.run(
+            ["bash", str(wrapper)],
+            input=env_text,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert failed.returncode == 1
+        assert "gsc-secret-marker" not in failed.stderr
+        assert previous.read_text(encoding="utf-8") == "previous-env\n"
+        assert stat.S_IMODE(previous.stat().st_mode) == 0o600
+        assert not (root / ".env.prev").exists()
+        assert list(root.glob(".env.*")) == []
+    finally:
+        listener.close()
