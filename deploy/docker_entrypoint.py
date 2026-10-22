@@ -4,6 +4,10 @@ The exporter accepts credentials only from a directory whose parent is
 ``/run/credentials``. This entrypoint creates that directory on the tmpfs,
 writes ``gsc.json`` and ``bing.json``, and replaces itself. Secret values
 are never logged.
+
+``WRITE_MODE`` and ``AUTH_TRUST_HOST`` are CrawlSEO flags. This service has
+no write API and does not trust ``X-Forwarded-Host``, so either name aborts
+the process before credentials are written.
 """
 
 from __future__ import annotations
@@ -27,6 +31,21 @@ _FILES = (
     ("SEO_EXPORTER_GSC_JSON", "gsc.json"),
     ("SEO_EXPORTER_BING_JSON", "bing.json"),
 )
+_FOREIGN_FLAGS = ("WRITE_MODE", "AUTH_TRUST_HOST")
+
+
+def reject_foreign_flags(source: Mapping[str, str]) -> None:
+    """Refuse CrawlSEO flags that do not belong to this service.
+
+    Args:
+        source: Incoming environment.
+
+    Raises:
+        SystemExit: ``WRITE_MODE`` or ``AUTH_TRUST_HOST`` is present.
+    """
+    for key in _FOREIGN_FLAGS:
+        if key in source:
+            raise SystemExit(f"{key} rejected")
 
 
 def write_credentials(source: Mapping[str, str], directory: Path) -> None:
@@ -76,7 +95,11 @@ def runtime_env(source: Mapping[str, str]) -> dict[str, str]:
 
     Returns:
         Environment for ``python -m seo_exporter``.
+
+    Raises:
+        SystemExit: ``WRITE_MODE`` or ``AUTH_TRUST_HOST`` is present.
     """
+    reject_foreign_flags(source)
     cleaned = {key: value for key, value in source.items() if key not in _DROP_KEYS}
     cleaned["CREDENTIALS_DIRECTORY"] = str(_CREDENTIALS)
     cleaned["SEO_EXPORTER_BIND"] = "127.0.0.1"
@@ -89,6 +112,7 @@ def runtime_env(source: Mapping[str, str]) -> dict[str, str]:
 def main() -> None:
     """Write credentials and exec the exporter."""
     source = dict(os.environ)
+    reject_foreign_flags(source)
     write_credentials(source, _CREDENTIALS)
     os.execve(sys.executable, [sys.executable, "-m", "seo_exporter"], runtime_env(source))
 

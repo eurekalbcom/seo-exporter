@@ -29,7 +29,7 @@ Runs as a service on the target host. GitHub Actions deploys it through the prot
 | `EUK_VAR_SEO_TARGET_HOSTKEY` | One OpenSSH known_hosts line for that host |
 | `EUK_VAR_SEO_GSC_SITE` | Search Console property for the Docker deploy |
 | `EUK_VAR_SEO_BING_SITE` | Bing site for the Docker deploy |
-| `SEO_DEPLOY_ENABLED` | Fail-closed HOLD switch. Deploy runs only when this is `true`. |
+| `SEO_DEPLOY_ENABLED` | Repository variable. Fail-closed HOLD switch. Publish and deploy run only when this is `true`. |
 
 There are no separate `*_CLIENT_ID` variables. The client IDs are inside the provider JSON secrets.
 
@@ -53,7 +53,7 @@ Use this when a credential leaks or is suspected to have leaked:
 
 ## Docker deploy
 
-The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push), in the `seo-readonly` environment (reviewer Jan, branch `main`). Host install via systemd or a root sudoers installer is rejected. See [deploy/README.md](deploy/README.md) for the forced command, the `authorized_keys` line, and rollback by previous image digest.
+The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push). The publish job pushes the image (`packages: write`, no EUK secrets). The deploy job is the `seo-readonly` environment (reviewer Jan, branch `main`) and does not have `packages: write`. Host install via systemd or a root sudoers installer is rejected. The container rejects `WRITE_MODE` and `AUTH_TRUST_HOST` if they are set. This service has no write API and does not trust `X-Forwarded-Host`. It listens on `127.0.0.1` only. Scraping it from outside the container is a separate GO. See [deploy/README.md](deploy/README.md) for the forced command, the `authorized_keys` line, and rollback by previous image digest.
 
 ## SEO Autopilot (EUR-407)
 
@@ -75,6 +75,8 @@ This repository is the home for the read-only SEO Autopilot MVP. CrawlSEO is ven
 | `ORCHESTRATOR_TOKEN` | unset | `/api/internal/jobs` stays 404 |
 | `METRICS_TOKEN` | unset | `GET /metrics` stays 401 |
 | `AUTH_TRUST_HOST` | unset | Trust `X-Forwarded-Host` only when exactly `true` |
+
+Those two flags belong to CrawlSEO. The Docker exporter rejects `WRITE_MODE` and `AUTH_TRUST_HOST` instead of honoring them.
 
 Secrets stay in the environment. Do not commit `.env` files or keys.
 

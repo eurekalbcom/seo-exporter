@@ -31,8 +31,8 @@ RUN pip install --no-cache-dir --root-user-action=ignore "tzdata==2026.5" \
 
 USER 10001:10001
 
-EXPOSE 9108
-
+# No published port. The server binds 127.0.0.1. Scraping from outside the
+# container is a separate GO.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9108/healthz', timeout=3).read()"]
 

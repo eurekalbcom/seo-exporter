@@ -23,7 +23,10 @@ The replacement secret is `EUK_SSH_SEO_DEPLOY_W216`. This change does not create
 - Required reviewer: Jan (`janjaszczak`). Admin bypass stays off.
 - The deploy workflow declares `environment: seo-readonly` and does not run on push.
 - Dispatch input `sha` must be a full commit that is on `main`. The sha-guard refuses anything else before SSH.
-- The job's first step is the fail-closed HOLD guard (`vars.SEO_DEPLOY_ENABLED` must be `true`, and `EUK_OAUTH_TAILSCALE_SEO_DEPLOY` must be present). The guard does not print those values.
+- `SEO_DEPLOY_ENABLED` is a repository variable. The publish job has no `environment:`, so an environment-scoped variable is invisible to it.
+- The publish job builds and pushes. Its permissions are `contents: read` and `packages: write`. It has no EUK secrets. Its first step fails closed when `SEO_DEPLOY_ENABLED` is not `true`.
+- The deploy job holds the `seo-readonly` secrets. Its permissions are `contents: read` only. Its first step is the fail-closed HOLD guard (`vars.SEO_DEPLOY_ENABLED` must be `true`, and `EUK_OAUTH_TAILSCALE_SEO_DEPLOY` must be present). The guard does not print those values.
+- An image can be pushed before the environment reviewer approves the deploy. That split keeps `packages: write` away from the job that holds the provider secrets.
 
 ### Secrets (names only)
 
@@ -36,23 +39,23 @@ The replacement secret is `EUK_SSH_SEO_DEPLOY_W216`. This change does not create
 
 `EUK_SSH_SEO_DEPLOY_V8QX` is retired by the revoke steps above. Do not wire it into this workflow.
 
-GHCR push uses the job's built-in `github.token` (`packages: write`). That token is not an environment secret and is passed to `docker login` on stdin.
+GHCR push uses the publish job's built-in `github.token` (`packages: write`). That token is not an environment secret and is passed to `docker login` on stdin. The deploy job does not receive it.
 
 ### Variables (names only)
 
 | Name | Purpose |
 |---|---|
-| `SEO_DEPLOY_ENABLED` | HOLD switch. Anything other than `true` fails the job. |
+| `SEO_DEPLOY_ENABLED` | Repository variable. Anything other than `true` fails publish and deploy. |
 | `EUK_VAR_SEO_TARGET_HOST` | witold216 address. Not committed. |
-| `EUK_VAR_SEO_TARGET_HOSTKEY` | One OpenSSH `known_hosts` line for that host. |
+| `EUK_VAR_SEO_TARGET_HOSTKEY` | One OpenSSH `known_hosts` line for that host. A second line, `@cert-authority`, or `@revoked` is refused before SSH. |
 | `EUK_VAR_SEO_GSC_SITE` | Search Console property. |
 | `EUK_VAR_SEO_BING_SITE` | Bing site URL. |
 
 ## Image pin and rollback
 
-Compose sets `image` from `SEO_EXPORTER_IMAGE`. The value must be `repository@sha256:` plus 64 hex characters. Tags are refused.
+Compose sets `image` from `SEO_EXPORTER_IMAGE`. The only accepted value is `ghcr.io/eurekalbcom/seo-exporter@sha256:` plus 64 hex characters. Other registries and tags are refused.
 
-A normal dispatch builds the selected SHA, pushes `ghcr.io/<repo>:sha-<sha>`, and deploys the registry digest printed as `image digest: sha256:...`. Record that line. It is not a secret.
+A normal dispatch builds the selected SHA, pushes `ghcr.io/eurekalbcom/seo-exporter:sha-<sha>`, and deploys the registry digest printed as `image digest: sha256:...`. The digest is the push log line `<tag>: digest: sha256:... size: N` checked against `docker image inspect` RepoDigests. Record that line. It is not a secret.
 
 Rollback is a redeploy of the previous digest, not a rebuild and not a systemd rollback:
 
@@ -63,13 +66,15 @@ Rollback is a redeploy of the previous digest, not a rebuild and not a systemd r
 
 ## What the deploy job writes
 
-The runner builds an env file at mode `0600` and passes it on stdin to `docker compose pull`. Provider JSON and the SSH key are environment variables on the runner, then the file body. They are not command-line arguments and they are not echoed.
+The runner builds an env file at mode `0600` and passes it on stdin to `docker compose pull`. The body is at most 64 KiB (65536 bytes). Provider JSON and the SSH key are environment variables on the runner, then the file body. They are not command-line arguments and they are not echoed.
 
-The forced command writes `/srv/seo-exporter/.env` at mode `0600` only after `docker compose pull` succeeds. A failed pull restores the previous file. `docker compose up -d` and `docker compose ps` refuse stdin.
+The file has exactly these six keys, each once: `SEO_EXPORTER_IMAGE`, `SEO_EXPORTER_GSC_SITE`, `SEO_EXPORTER_BING_SITE`, `SEO_EXPORTER_GSC_JSON`, `SEO_EXPORTER_BING_JSON`, `SEO_COMPOSE_SHA256`. Comments, blank lines, and any other key are refused. `WRITE_MODE` and `AUTH_TRUST_HOST` are not keys of this file.
 
-The container entrypoint copies the JSON into `/run/credentials/seo-exporter/{gsc,bing}.json` (mode `0400`) and removes those variables from the process environment before `python -m seo_exporter`. `docker compose config` on a host that has the real env file will print it. Do not capture that output. Use `deploy/env.example` for local renders.
+The forced command writes `/srv/seo-exporter/.env` at mode `0600` only after `docker compose pull` succeeds. A failed pull restores the previous file. `docker compose up -d` and `docker compose ps` refuse stdin. The wrapper unsets every exported `COMPOSE_*` variable and always runs `docker compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter`. `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, and `COMPOSE_PROFILES` cannot point the pull at another file.
 
-`SEO_EXPORTER_BIND` is forced to `127.0.0.1` and the state directory is forced to `/var/lib/seo-exporter`. The env file cannot move either one. The process still refuses a non-loopback bind.
+The container entrypoint copies the JSON into `/run/credentials/seo-exporter/{gsc,bing}.json` (mode `0400`) and removes those variables from the process environment before `python -m seo_exporter`. If `WRITE_MODE` or `AUTH_TRUST_HOST` is set, the process exits before writing credentials. This service has no write API and does not trust `X-Forwarded-Host`. `docker compose config` on a host that has the real env file will print it. Do not capture that output. Use `deploy/env.example` for local renders.
+
+`SEO_EXPORTER_BIND` is forced to `127.0.0.1` and the state directory is forced to `/var/lib/seo-exporter`. The env file cannot move either one. The process still refuses a non-loopback bind. The port is not exposed on the compose network. Scraping from outside the container is a separate GO.
 
 ## Host layout on witold216
 
@@ -82,7 +87,7 @@ One-time admin bootstrap. This is not the rejected root installer: there is no s
 - `/usr/local/sbin/seo-exporter-compose` is a root-owned copy of `deploy/seo-exporter-compose`, mode `0755`. The deploy user cannot rewrite it.
 - One-time `docker login ghcr.io --password-stdin` as `seo-deploy`, so `docker compose pull` can read the private package. This PR does not create that credential.
 
-The compose project name is `seo-exporter`. Its only network is `seo-exporter_net`. It does not join another project's networks or volumes, does not mount the Docker socket, does not publish host ports (`expose` only), drops all capabilities, sets `no-new-privileges`, and uses a read-only root filesystem with tmpfs for `/run/credentials`, `/var/lib/seo-exporter`, and `/tmp`.
+The compose project name is `seo-exporter`. Its only network is `seo-exporter_net`. It does not join another project's networks or volumes, does not mount the Docker socket, does not publish or expose a port, drops all capabilities, sets `no-new-privileges`, and uses a read-only root filesystem with tmpfs for `/run/credentials`, `/var/lib/seo-exporter`, and `/tmp`.
 
 ## authorized_keys
 
@@ -92,7 +97,7 @@ Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). Re
 restrict,command="/usr/local/sbin/seo-exporter-compose" ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
 ```
 
-`restrict` disables TTY, port forwarding, agent forwarding, and X11. The command wrapper accepts only these `SSH_ORIGINAL_COMMAND` values, and only in `/srv/seo-exporter`:
+`restrict` disables TTY, port forwarding, agent forwarding, and X11. The command wrapper accepts only these `SSH_ORIGINAL_COMMAND` values. It runs them in `/srv/seo-exporter` and adds `-f /srv/seo-exporter/docker-compose.yml -p seo-exporter` itself:
 
 - `docker compose pull`
 - `docker compose up -d`

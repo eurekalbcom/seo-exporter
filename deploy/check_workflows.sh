@@ -67,6 +67,47 @@ if grep -q 'EUK_SSH_SEO_DEPLOY_V8QX' "$deploy"; then
   exit 1
 fi
 
+extract_job() {
+  local name=$1
+  awk -v job="  ${name}:" '
+    $0 == job { inside = 1; next }
+    inside && /^  [^[:space:]]/ { exit }
+    inside { print }
+  ' "$deploy"
+}
+
+publish_body=$(extract_job publish)
+if [[ -z "$publish_body" ]]; then
+  printf '%s\n' "deploy workflow must have a publish job" >&2
+  exit 1
+fi
+if [[ "$publish_body" != *"packages: write"* ]]; then
+  printf '%s\n' "publish job must have packages: write" >&2
+  exit 1
+fi
+if [[ "$publish_body" == *"secrets."* || "$publish_body" == *"environment:"* ]]; then
+  printf '%s\n' "publish job must not reference secrets or an environment" >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # literal copied from the workflow, not an expansion
+if [[ "$publish_body" != *'DEPLOY_ENABLED: ${{ vars.SEO_DEPLOY_ENABLED }}'* ]]; then
+  printf '%s\n' "publish guard must read SEO_DEPLOY_ENABLED" >&2
+  exit 1
+fi
+deploy_body=$(extract_job deploy)
+if [[ -z "$deploy_body" ]]; then
+  printf '%s\n' "deploy workflow must have a deploy job" >&2
+  exit 1
+fi
+if [[ "$deploy_body" == *"packages: write"* ]]; then
+  printf '%s\n' "deploy job must not have packages: write" >&2
+  exit 1
+fi
+if [[ "$deploy_body" != *"environment: seo-readonly"* ]]; then
+  printf '%s\n' "deploy job must use the seo-readonly environment" >&2
+  exit 1
+fi
+
 # shellcheck disable=SC2016 # literals copied from the workflow, not expansions
 require_deploy_hold_guard() {
   local deploy_file=$1

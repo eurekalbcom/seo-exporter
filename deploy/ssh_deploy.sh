@@ -29,6 +29,32 @@ if [[ -z "$SSH_KEY" || "$SSH_KEY" != *[![:space:]]* ]]; then
   exit 1
 fi
 
+# One known_hosts line. A trailing CR/LF is stripped. Another line, or an
+# OpenSSH certificate-authority / revocation marker, is refused before any
+# temp file or secret check.
+hostkey=$SEO_TARGET_HOSTKEY
+if [[ "$hostkey" == *$'\r\n' ]]; then
+  hostkey=${hostkey%$'\r\n'}
+elif [[ "$hostkey" == *$'\n' ]]; then
+  hostkey=${hostkey%$'\n'}
+elif [[ "$hostkey" == *$'\r' ]]; then
+  hostkey=${hostkey%$'\r'}
+fi
+case "$hostkey" in
+  *$'\n'* | *$'\r'* | "")
+    printf '%s\n' "target host key variable is invalid" >&2
+    exit 1
+    ;;
+esac
+hostkey_lower=$(printf '%s' "$hostkey" | tr '[:upper:]' '[:lower:]')
+case "$hostkey_lower" in
+  *"@cert-authority"* | *"@revoked"*)
+    printf '%s\n' "target host key variable is invalid" >&2
+    exit 1
+    ;;
+esac
+SEO_TARGET_HOSTKEY=$hostkey
+
 python3 -m deploy.envfile check
 
 workdir=$(mktemp -d)
@@ -38,7 +64,7 @@ known="${workdir}/known_hosts"
 envfile="${workdir}/env"
 
 printf '%s' "$SSH_KEY" | python3 deploy/write_ssh_key.py "$keyfile"
-printf '%s\n' "$SEO_TARGET_HOSTKEY" >"$known"
+printf '%s\n' "$hostkey" >"$known"
 chmod 600 "$known"
 python3 -m deploy.envfile write "$envfile"
 

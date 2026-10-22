@@ -14,10 +14,10 @@ from pathlib import Path
 
 from deploy.credentials_json import canonicalize_credential
 
-_IMAGE = re.compile(
-    r"^[a-z0-9]+(?:\.[a-z0-9]+)+(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$"
-)
+ALLOWED_REPO = "ghcr.io/eurekalbcom/seo-exporter"
+_IMAGE = re.compile(rf"^{re.escape(ALLOWED_REPO)}@sha256:[0-9a-f]{{64}}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_MAX_ENV_BYTES = 65536
 
 
 def quote_single(value: str) -> str:
@@ -51,6 +51,8 @@ def normalize_image(repo: str, digest: str) -> str:
         ValueError: The reference is not a digest pin for ``repo``.
     """
     repository = repo.strip().lower()
+    if repository != ALLOWED_REPO:
+        raise ValueError("image digest rejected")
     raw = digest.strip().lower()
     if raw.startswith("sha256:"):
         ref = repository + "@" + raw
@@ -156,7 +158,10 @@ def render_env(
         f"SEO_EXPORTER_BING_JSON={quote_single(bing_json)}",
         f"SEO_COMPOSE_SHA256={compose_sha}",
     )
-    return "\n".join(lines) + "\n"
+    text = "\n".join(lines) + "\n"
+    if len(text.encode()) > _MAX_ENV_BYTES:
+        raise ValueError("env file rejected")
+    return text
 
 
 def write_env_file(path: Path, text: str) -> None:

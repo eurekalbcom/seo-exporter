@@ -20,13 +20,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  publish:
+    if: ${{ inputs.image_digest == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Publish guard
+        env:
+          DEPLOY_ENABLED: ${{ vars.SEO_DEPLOY_ENABLED }}
+        run: |
+          if [ "$DEPLOY_ENABLED" != "true" ]; then echo "HOLD: SEO_DEPLOY_ENABLED != true"; exit 1; fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: main
+
+      - name: sha-guard
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: bash deploy/sha_guard.sh
+
+      - name: Checkout selected commit
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: git checkout --detach "$DEPLOY_SHA"
+
+      - name: Build and push image
+        id: push
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          IMAGE_REPO: ghcr.io/eurekalbcom/seo-exporter
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          bash deploy/build_push.sh
+          digest_file="${RUNNER_TEMP}/seo-image-digest"
+          digest=$(tr -d '[:space:]' < "$digest_file")
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "registry digest missing" >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
   deploy:
+    needs: publish
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: seo-readonly
     permissions:
       contents: read
-      packages: write
     steps:
       - name: HOLD guard (fail-closed)
         env:
@@ -63,14 +114,6 @@ jobs:
           tags: tag:gh-seo-deploy
           version: "1.94.2"
 
-      - name: Build and push image
-        if: inputs.image_digest == ''
-        env:
-          GHCR_TOKEN: ${{ github.token }}
-          IMAGE_REPO: ghcr.io/${{ github.repository }}
-          DEPLOY_SHA: ${{ inputs.sha }}
-        run: bash deploy/build_push.sh
-
       - name: Deploy over SSH
         env:
           SEO_TARGET_HOST: ${{ vars.EUK_VAR_SEO_TARGET_HOST }}
@@ -80,6 +123,6 @@ jobs:
           BING_JSON: ${{ secrets.EUK_OAUTH_BING_READONLY }}
           GSC_SITE: ${{ vars.EUK_VAR_SEO_GSC_SITE }}
           BING_SITE: ${{ vars.EUK_VAR_SEO_BING_SITE }}
-          IMAGE_REPO: ghcr.io/${{ github.repository }}
-          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          IMAGE_REPO: ghcr.io/eurekalbcom/seo-exporter
+          IMAGE_DIGEST: ${{ inputs.image_digest || needs.publish.outputs.digest }}
         run: bash deploy/ssh_deploy.sh

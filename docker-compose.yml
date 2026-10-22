@@ -1,6 +1,8 @@
 # Dedicated compose project for the read-only SEO exporter.
 # The bridge is not attached to any other project. Provider APIs need egress,
-# so the network is not internal. Host ports are not published.
+# so the network is not internal. The process binds 127.0.0.1 inside the
+# container. The port is not published and not exposed. Scraping from outside
+# the container is a separate GO.
 name: seo-exporter
 
 services:
@@ -13,8 +15,6 @@ services:
       - no-new-privileges:true
     networks:
       - seo-exporter_net
-    expose:
-      - "9108"
     env_file:
       - path: .env
         required: true

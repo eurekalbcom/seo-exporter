@@ -5,6 +5,7 @@
 #   docker compose pull
 #   docker compose up -d
 #   docker compose ps
+# The wrapper adds the compose file and project. The client strings stay exact.
 set -euo pipefail
 umask 077
 unset CDPATH
@@ -12,6 +13,19 @@ unset SEO_COMPOSE_ROOT
 unset SEO_DOCKER_SOCKET
 unset DOCKER_HOST
 unset DOCKER_CONTEXT
+
+# Drop every exported COMPOSE_* variable. COMPOSE_FILE, COMPOSE_PROJECT_NAME,
+# and COMPOSE_PROFILES would otherwise select a different file than the one
+# whose hash was checked.
+drop_compose_env() {
+  local name
+  while IFS= read -r name; do
+    if [[ -n "$name" ]]; then
+      unset "$name"
+    fi
+  done < <(compgen -e COMPOSE_ || true)
+}
+drop_compose_env
 
 ROOT=/srv/seo-exporter
 cd -- "$ROOT"
@@ -46,26 +60,58 @@ case "$cmd" in
     ;;
 esac
 
-image_re='^SEO_EXPORTER_IMAGE=[a-z0-9]+([.][a-z0-9]+)+(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
+# Exactly these six keys, each once. Comments, blanks, and any other key are
+# refused. The image is this repository's GHCR name pinned by digest.
+image_re='^ghcr\.io/eurekalbcom/seo-exporter@sha256:[0-9a-f]{64}$'
 
 validate_env() {
   local file=$1
-  local key count
-  count=$(grep -cE '^SEO_EXPORTER_IMAGE=' "$file" || true)
-  if [[ "$count" -ne 1 ]]; then
+  local line key value
+  local -a lines=()
+  local -A seen=()
+  mapfile -t lines <"$file"
+  if [[ "${#lines[@]}" -ne 6 ]]; then
     printf '%s\n' "env rejected" >&2
     return 1
   fi
-  if ! grep -Eq "$image_re" "$file"; then
-    printf '%s\n' "env rejected" >&2
-    return 1
-  fi
-  if ! grep -Eq '^SEO_COMPOSE_SHA256=[0-9a-f]{64}$' "$file"; then
-    printf '%s\n' "env rejected" >&2
-    return 1
-  fi
-  for key in SEO_EXPORTER_GSC_SITE SEO_EXPORTER_BING_SITE SEO_EXPORTER_GSC_JSON SEO_EXPORTER_BING_JSON; do
-    if ! grep -Eq "^${key}=.+" "$file"; then
+  for line in "${lines[@]}"; do
+    if [[ -z "$line" || "$line" == \#* || "$line" == *$'\r'* || "$line" =~ ^[[:space:]] ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+    if [[ ! "$line" =~ ^[A-Z0-9_]+=.+ ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+    key=${line%%=*}
+    value=${line#*=}
+    if [[ -n "${seen[$key]+x}" ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+    seen[$key]=1
+    case "$key" in
+      SEO_EXPORTER_IMAGE)
+        if [[ ! "$value" =~ $image_re ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      SEO_COMPOSE_SHA256)
+        if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      SEO_EXPORTER_GSC_SITE | SEO_EXPORTER_BING_SITE | SEO_EXPORTER_GSC_JSON | SEO_EXPORTER_BING_JSON) ;;
+      *)
+        printf '%s\n' "env rejected" >&2
+        return 1
+        ;;
+    esac
+  done
+  for key in SEO_EXPORTER_IMAGE SEO_EXPORTER_GSC_SITE SEO_EXPORTER_BING_SITE SEO_EXPORTER_GSC_JSON SEO_EXPORTER_BING_JSON SEO_COMPOSE_SHA256; do
+    if [[ -z "${seen[$key]+x}" ]]; then
       printf '%s\n' "env rejected" >&2
       return 1
     fi
@@ -119,15 +165,27 @@ install_env() {
   chmod 600 "$tmp"
   mv -f -- "$tmp" "${ROOT}/.env"
   chmod 600 "${ROOT}/.env"
-  if ! docker compose pull; then
+  drop_compose_env
+  if ! docker compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter pull; then
     restore_env
     exit 1
   fi
   rm -f -- "${ROOT}/.env.prev"
 }
 
+# 64 KiB. One extra byte is refused and never passed to docker.
 tmp=$(mktemp "${ROOT}/.env.XXXXXX")
-cat >"$tmp"
+if ! dd if=/dev/stdin of="$tmp" bs=65537 count=1 status=none iflag=fullblock; then
+  rm -f -- "$tmp"
+  printf '%s\n' "env rejected" >&2
+  exit 1
+fi
+stdin_bytes=$(wc -c <"$tmp" | tr -d '[:space:]')
+if [[ "$stdin_bytes" -gt 65536 ]]; then
+  rm -f -- "$tmp"
+  printf '%s\n' "env rejected" >&2
+  exit 1
+fi
 if [[ "$cmd" != "docker compose pull" ]]; then
   if [[ -s "$tmp" ]]; then
     rm -f -- "$tmp"
@@ -144,7 +202,7 @@ if [[ "$cmd" != "docker compose pull" ]]; then
     printf '%s\n' "env file mode refused" >&2
     exit 1
   fi
-  if ! compose_allowed || ! compose_hash_ok "${ROOT}/.env"; then
+  if ! validate_env "${ROOT}/.env" || ! compose_allowed || ! compose_hash_ok "${ROOT}/.env"; then
     exit 1
   fi
 else
@@ -159,10 +217,12 @@ fi
 case "$cmd" in
   "docker compose pull") ;;
   "docker compose up -d")
-    exec docker compose up -d
+    drop_compose_env
+    exec docker compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter up -d
     ;;
   "docker compose ps")
-    exec docker compose ps
+    drop_compose_env
+    exec docker compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter ps
     ;;
   *)
     printf '%s\n' "command refused" >&2
