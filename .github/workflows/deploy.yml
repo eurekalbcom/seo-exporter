@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       image_digest:
-        description: Rollback digest (sha256 hex or name@sha256). Empty builds the SHA.
+        description: Digest of ghcr.io/eurekalbcom/seo-exporter:sha-<sha>. Empty builds the SHA.
         required: false
         type: string
 
@@ -78,6 +78,7 @@ jobs:
     environment: seo-readonly
     permissions:
       contents: read
+      packages: read
     steps:
       - name: HOLD guard (fail-closed)
         env:
@@ -98,6 +99,15 @@ jobs:
         env:
           DEPLOY_SHA: ${{ inputs.sha }}
         run: bash deploy/sha_guard.sh
+
+      - name: Verify rollback digest
+        if: ${{ inputs.image_digest != '' }}
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          DEPLOY_SHA: ${{ inputs.sha }}
+        run: bash deploy/verify_rollback.sh
 
       - name: Checkout selected commit
         env:

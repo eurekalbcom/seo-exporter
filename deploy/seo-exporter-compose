@@ -63,6 +63,8 @@ esac
 # Exactly these six keys, each once. Comments, blanks, and any other key are
 # refused. The image is this repository's GHCR name pinned by digest.
 image_re='^ghcr\.io/eurekalbcom/seo-exporter@sha256:[0-9a-f]{64}$'
+# Single quotes, with no quote inside, so Compose does not interpolate ${}.
+quoted_re="^'[^']+'$"
 
 validate_env() {
   local file=$1
@@ -103,7 +105,12 @@ validate_env() {
           return 1
         fi
         ;;
-      SEO_EXPORTER_GSC_SITE | SEO_EXPORTER_BING_SITE | SEO_EXPORTER_GSC_JSON | SEO_EXPORTER_BING_JSON) ;;
+      SEO_EXPORTER_GSC_SITE | SEO_EXPORTER_BING_SITE | SEO_EXPORTER_GSC_JSON | SEO_EXPORTER_BING_JSON)
+        if [[ ! "$value" =~ $quoted_re ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
       *)
         printf '%s\n' "env rejected" >&2
         return 1

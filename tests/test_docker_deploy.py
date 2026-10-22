@@ -18,6 +18,7 @@ import pytest
 from deploy.docker_entrypoint import runtime_env, write_credentials
 from deploy.envfile import build_from_environ, normalize_image, render_env, write_env_file
 from deploy.image_digest import digest_from_push_log, digest_from_repo_digests
+from deploy.rollback_digest import RollbackError, canonical_digest, digest_from_inspect
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -222,6 +223,9 @@ def test_workflow_contract() -> None:
     assert "secrets." not in publish
     assert "environment:" not in publish
     assert "packages: write" not in deploy_job
+    assert "packages: read" in deploy_job
+    assert "bash deploy/verify_rollback.sh" in deploy_job
+    assert deploy_job.index("bash deploy/verify_rollback.sh") < deploy_job.index("git checkout --detach")
     assert "environment: seo-readonly" in deploy_job
     assert "ghcr.io/${{ github.repository }}" not in deploy
     assert "ghcr.io/eurekalbcom/seo-exporter" in deploy
@@ -798,3 +802,234 @@ def test_entrypoint_rejects_write_mode_and_auth_trust_host() -> None:
         runtime_env({"PATH": "/usr/bin", "WRITE_MODE": "off"})
     with pytest.raises(SystemExit, match="AUTH_TRUST_HOST rejected"):
         runtime_env({"AUTH_TRUST_HOST": "false"})
+
+
+def test_rendered_env_quotes_sites_and_json_for_compose(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy(ROOT / "docker-compose.yml", project / "docker-compose.yml")
+    source = _base_env()
+    source["COMPOSE_FILE"] = str(project / "docker-compose.yml")
+    source["GSC_SITE"] = "sc-domain:${UNTRUSTED}"
+    source["GSC_JSON"] = _credential("${UNTRUSTED}")
+    text = build_from_environ(source)
+    for key in (
+        "SEO_EXPORTER_GSC_SITE",
+        "SEO_EXPORTER_BING_SITE",
+        "SEO_EXPORTER_GSC_JSON",
+        "SEO_EXPORTER_BING_JSON",
+    ):
+        value = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith(key + "="))
+        assert re.fullmatch(r"'[^']+'", value), key
+    (project / ".env").write_text(text, encoding="utf-8")
+    (project / ".env").chmod(0o600)
+    env = os.environ.copy()
+    env["UNTRUSTED"] = "pwned-marker"
+    rendered = subprocess.run(
+        ["docker", "compose", "--project-directory", str(project), "config"],
+        cwd=project,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    assert "pwned-marker" not in rendered.stdout
+    assert "$${UNTRUSTED}" in rendered.stdout
+    quoted = source.copy()
+    quoted["BING_SITE"] = "https://example.com/a'b"
+    with pytest.raises(ValueError, match="BING_SITE rejected"):
+        build_from_environ(quoted)
+    quoted_json = source.copy()
+    quoted_json["BING_JSON"] = _credential("sec'ret")
+    with pytest.raises(ValueError, match="env value rejected"):
+        build_from_environ(quoted_json)
+
+
+def test_forced_command_rejects_unquoted_interpolation(tmp_path: Path) -> None:
+    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    valid = _valid_wrapper_env(compose_sha)
+    bodies = (
+        _replace_env_line(valid, "SEO_EXPORTER_GSC_SITE=", "SEO_EXPORTER_GSC_SITE=sc-domain:${UNTRUSTED}"),
+        _replace_env_line(valid, "SEO_EXPORTER_BING_SITE=", "SEO_EXPORTER_BING_SITE='https://example.com/a'b'"),
+        _replace_env_line(
+            valid,
+            "SEO_EXPORTER_GSC_JSON=",
+            'SEO_EXPORTER_GSC_JSON={"client_secret":"${UNTRUSTED}"}',
+        ),
+        _replace_env_line(
+            valid,
+            "SEO_EXPORTER_BING_JSON=",
+            'SEO_EXPORTER_BING_JSON=\'{"client_secret":"sec\'"\'"\'ret"}\'',
+        ),
+    )
+    for body in bodies:
+        completed = _run_forced(tmp_path, body)
+        assert completed.returncode == 1
+        assert "env rejected" in completed.stderr
+        assert "UNTRUSTED" not in completed.stderr
+        assert not (tmp_path / "docker-ran").exists()
+
+
+def _git_main(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        completed = subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=test", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    git("init", "-b", "main")
+    (repo / "file").write_text("one\n", encoding="utf-8")
+    git("add", "file")
+    git("commit", "-m", "one")
+    return repo, git("rev-parse", "HEAD")
+
+
+def _rollback_docker(bin_dir: Path, script: str) -> None:
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(script, encoding="utf-8")
+    docker.chmod(0o755)
+
+
+def test_rollback_rejects_mismatched_and_foreign_digests(tmp_path: Path) -> None:
+    repo, sha = _git_main(tmp_path)
+    digest = "sha256:" + ("ab" * 32)
+    other = "sha256:" + ("cd" * 32)
+    inspect = tmp_path / "inspect.txt"
+    inspect.write_text(
+        f"Name:\t{_REPO}:sha-{sha}\nMediaType:\tapplication/vnd.oci.image.manifest.v1+json\nDigest:\t{other}\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    ran = tmp_path / "docker-ran"
+    argv = tmp_path / "docker-argv"
+    _rollback_docker(
+        bin_dir,
+        "#!/bin/sh\n"
+        'touch "$DOCKER_RAN"\n'
+        'printf "%s\\n" "$*" >> "$DOCKER_ARGV"\n'
+        'if [ "$1" = "login" ]; then cat >/dev/null; exit 0; fi\n'
+        'if [ "$1" = "logout" ]; then exit 0; fi\n'
+        'if [ "$1" = "buildx" ]; then cat "$DOCKER_INSPECT"; exit 0; fi\n'
+        'echo "unexpected $*" >&2\n'
+        "exit 1\n",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["DOCKER_RAN"] = str(ran)
+    env["DOCKER_ARGV"] = str(argv)
+    env["DOCKER_INSPECT"] = str(inspect)
+    env["GHCR_TOKEN"] = "token-marker"
+    env["GITHUB_ACTOR"] = "tester"
+    env["DEPLOY_SHA"] = sha
+    env["IMAGE_DIGEST"] = digest
+    mismatch = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "verify_rollback.sh")],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert mismatch.returncode == 1
+    assert "rollback digest mismatch" in mismatch.stderr
+    assert "token-marker" not in mismatch.stdout
+    assert "token-marker" not in mismatch.stderr
+    assert "sha-guard: ok" in mismatch.stdout
+    assert f"buildx imagetools inspect {_REPO}:sha-{sha}" in argv.read_text(encoding="utf-8")
+    ran.unlink()
+    for foreign in (
+        f"ghcr.io/example/seo-exporter@{digest}",
+        f"ghcr.io/eurekalbcom/other@{digest}",
+        f"docker.io/library/seo-exporter@{digest}",
+    ):
+        env["IMAGE_DIGEST"] = foreign
+        refused = subprocess.run(
+            ["bash", str(ROOT / "deploy" / "verify_rollback.sh")],
+            cwd=repo,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert refused.returncode == 1
+        assert "rollback digest rejected" in refused.stderr
+        assert "token-marker" not in refused.stderr
+        assert foreign not in refused.stderr
+        assert not ran.exists()
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=test", "checkout", "-b", "side"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (repo / "file").write_text("two\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "file"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "two"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    side_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, capture_output=True, text=True)
+    env["DEPLOY_SHA"] = side_sha
+    env["IMAGE_DIGEST"] = digest
+    ancestor = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "verify_rollback.sh")],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert ancestor.returncode == 1
+    assert "sha-guard: refuse" in ancestor.stderr
+    assert side_sha not in ancestor.stdout
+    assert not ran.exists()
+    assert canonical_digest(digest) == digest
+    with pytest.raises(RollbackError, match="rollback digest rejected"):
+        canonical_digest(f"ghcr.io/example/seo-exporter@{digest}")
+    report = (
+        f"Name:\t{_REPO}:sha-{sha}\n"
+        "MediaType:\tapplication/vnd.oci.image.manifest.v1+json\n"
+        f"Digest:\t{digest}\n"
+    )
+    assert digest_from_inspect(report, sha) == digest
+    manifest = json.dumps(
+        {
+            "Ref": f"{_REPO}:sha-{sha}",
+            "Descriptor": {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": digest, "size": 4},
+        }
+    )
+    assert digest_from_inspect(manifest, sha) == digest
+    with pytest.raises(RollbackError, match="rollback digest rejected"):
+        digest_from_inspect(
+            json.dumps({"name": f"ghcr.io/example/seo-exporter:sha-{sha}", "manifest": {"digest": digest}}),
+            sha,
+        )
+    with pytest.raises(RollbackError, match="rollback digest missing"):
+        digest_from_inspect(json.dumps([{"Descriptor": {"digest": digest}}]), sha)

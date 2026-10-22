@@ -107,6 +107,20 @@ if [[ "$deploy_body" != *"environment: seo-readonly"* ]]; then
   printf '%s\n' "deploy job must use the seo-readonly environment" >&2
   exit 1
 fi
+if [[ "$deploy_body" != *"packages: read"* ]]; then
+  printf '%s\n' "deploy job must have packages: read" >&2
+  exit 1
+fi
+if [[ "$deploy_body" != *"bash deploy/verify_rollback.sh"* ]]; then
+  printf '%s\n' "deploy job must verify a rollback digest" >&2
+  exit 1
+fi
+verify_at=${deploy_body%%bash deploy/verify_rollback.sh*}
+detach_at=${deploy_body%%git checkout --detach*}
+if [[ "$verify_at" == "$deploy_body" || "$detach_at" == "$deploy_body" || ${#verify_at} -gt ${#detach_at} ]]; then
+  printf '%s\n' "rollback digest check must run before detaching HEAD" >&2
+  exit 1
+fi
 
 # shellcheck disable=SC2016 # literals copied from the workflow, not expansions
 require_deploy_hold_guard() {

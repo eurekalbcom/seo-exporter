@@ -106,7 +106,8 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck deploy/sha_guard.sh deploy/ssh_deploy.sh deploy/build_push.sh \
-            deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh
+            deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh \
+            deploy/verify_rollback.sh
 
       - name: Workflow policy
         run: bash deploy/check_workflows.sh

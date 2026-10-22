@@ -57,18 +57,20 @@ Compose sets `image` from `SEO_EXPORTER_IMAGE`. The only accepted value is `ghcr
 
 A normal dispatch builds the selected SHA, pushes `ghcr.io/eurekalbcom/seo-exporter:sha-<sha>`, and deploys the registry digest printed as `image digest: sha256:...`. The digest is the push log line `<tag>: digest: sha256:... size: N` checked against `docker image inspect` RepoDigests. Record that line. It is not a secret.
 
-Rollback is a redeploy of the previous digest, not a rebuild and not a systemd rollback:
+Rollback is a redeploy of a previous digest, not a rebuild and not a systemd rollback. The deploy job checks it before SSH, while HEAD is still `main`:
 
 1. Open **Run workflow** on `main`.
-2. Set `sha` to a commit on `main` that contains this compose file (the sha-guard still applies).
-3. Set `image_digest` to the previous `sha256:...` or the full `ghcr.io/...@sha256:...` reference.
-4. The build step is skipped. The host runs `docker compose pull` and `docker compose up -d` for that digest.
+2. Set `sha` to a commit on `main` that contains this compose file. The sha-guard refuses anything that is not an ancestor of `main`.
+3. Set `image_digest` to `sha256:...` or `ghcr.io/eurekalbcom/seo-exporter@sha256:...`. It must be the digest of `ghcr.io/eurekalbcom/seo-exporter:sha-<sha>`. `docker buildx imagetools inspect` reads that tag (or `docker manifest inspect --verbose` when buildx is absent). A different digest, or a digest for any other repository, fails closed.
+4. The publish job is skipped. The host runs `docker compose pull` and `docker compose up -d` for that digest.
+
+The deploy job has `packages: read` so that inspect can log in with `github.token`. It does not have `packages: write`, and that token is not passed to SSH.
 
 ## What the deploy job writes
 
 The runner builds an env file at mode `0600` and passes it on stdin to `docker compose pull`. The body is at most 64 KiB (65536 bytes). Provider JSON and the SSH key are environment variables on the runner, then the file body. They are not command-line arguments and they are not echoed.
 
-The file has exactly these six keys, each once: `SEO_EXPORTER_IMAGE`, `SEO_EXPORTER_GSC_SITE`, `SEO_EXPORTER_BING_SITE`, `SEO_EXPORTER_GSC_JSON`, `SEO_EXPORTER_BING_JSON`, `SEO_COMPOSE_SHA256`. Comments, blank lines, and any other key are refused. `WRITE_MODE` and `AUTH_TRUST_HOST` are not keys of this file.
+The file has exactly these six keys, each once: `SEO_EXPORTER_IMAGE`, `SEO_EXPORTER_GSC_SITE`, `SEO_EXPORTER_BING_SITE`, `SEO_EXPORTER_GSC_JSON`, `SEO_EXPORTER_BING_JSON`, `SEO_COMPOSE_SHA256`. Comments, blank lines, and any other key are refused. `WRITE_MODE` and `AUTH_TRUST_HOST` are not keys of this file. The two site values and both JSON values are single-quoted and must not contain a single quote. Compose then treats `${...}` inside them as literal text.
 
 The forced command writes `/srv/seo-exporter/.env` at mode `0600` only after `docker compose pull` succeeds. A failed pull restores the previous file. `docker compose up -d` and `docker compose ps` refuse stdin. The wrapper unsets every exported `COMPOSE_*` variable and always runs `docker compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter`. `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, and `COMPOSE_PROFILES` cannot point the pull at another file.
 
@@ -110,7 +112,7 @@ Any other command, including a shell, is refused. The account has no sudo.
 ```bash
 python3 -m pip install -r requirements-dev.txt
 python3 -m pytest
-shellcheck deploy/sha_guard.sh deploy/ssh_deploy.sh deploy/build_push.sh deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh
+shellcheck deploy/sha_guard.sh deploy/ssh_deploy.sh deploy/build_push.sh deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh deploy/verify_rollback.sh
 bash deploy/check_workflows.sh
 hadolint Dockerfile
 actionlint
