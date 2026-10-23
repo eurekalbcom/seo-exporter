@@ -43,42 +43,47 @@ services:
     pids_limit: 64
     networks:
       - seo-exporter_net
+    # Inline Compose configs are copied with docker cp, which a read-only root rejects.
+    # Write the hashed config onto a tmpfs, then exec the agent.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        cat > /etc/prometheus/prometheus.yml << 'EOF'
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 10s
+
+        scrape_configs:
+          - job_name: seo-exporter
+            metrics_path: /metrics
+            sample_limit: 1000
+            static_configs:
+              - targets:
+                  - seo-exporter:9108
+
+        remote_write:
+          - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
+            follow_redirects: false
+            write_relabel_configs:
+              - source_labels: [__name__]
+                regex: seo_.*
+                action: keep
+        EOF
+        chmod 0444 /etc/prometheus/prometheus.yml
+        exec /bin/prometheus "$@"
+      - prometheus
     command:
       - --agent
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.agent.path=/prometheus
       - --web.listen-address=127.0.0.1:9090
-    configs:
-      - source: prometheus_agent
-        target: /etc/prometheus/prometheus.yml
-        mode: 0444
     tmpfs:
+      - /etc/prometheus:uid=65534,gid=65534,mode=0750
       - /prometheus:uid=65534,gid=65534,mode=0750
       - /tmp:uid=65534,gid=65534,mode=1770
     restart: unless-stopped
-
-configs:
-  prometheus_agent:
-    content: |
-      global:
-        scrape_interval: 30s
-        scrape_timeout: 10s
-
-      scrape_configs:
-        - job_name: seo-exporter
-          metrics_path: /metrics
-          sample_limit: 1000
-          static_configs:
-            - targets:
-                - seo-exporter:9108
-
-      remote_write:
-        - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
-          follow_redirects: false
-          write_relabel_configs:
-            - source_labels: [__name__]
-              regex: seo_.*
-              action: keep
 
 networks:
   seo-exporter_net:

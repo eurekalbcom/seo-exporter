@@ -211,6 +211,10 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "prom/prometheus:v3.15.1@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae" in text
     assert "create_host_path" not in text
     assert "volumes:" not in text
+    assert not any(line.strip() == "configs:" for line in text.splitlines())
+    assert "content: |" not in text
+    assert "cat > /etc/prometheus/prometheus.yml << 'EOF'" in text
+    assert "/etc/prometheus:uid=65534,gid=65534,mode=0750" in text
     assert _compose_config_content(text) == (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
     flags = _agent_command(text)
     assert "--agent" in flags
@@ -867,15 +871,20 @@ _PORT_TOKEN = "${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}"
 
 def _compose_config_content(text: str) -> str:
     lines = text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line.strip() == "content: |")
+    marker = "cat > /etc/prometheus/prometheus.yml << 'EOF'"
+    start = next(index for index, line in enumerate(lines) if line.strip() == marker)
+    indent = len(lines[start]) - len(lines[start].lstrip(" "))
+    prefix = " " * indent
     body: list[str] = []
     for line in lines[start + 1 :]:
+        if line.strip() == "EOF":
+            break
         if line.strip() == "":
             body.append("")
             continue
-        if not line.startswith("      "):
-            break
-        body.append(line[6:])
+        if not line.startswith(prefix):
+            raise AssertionError(line)
+        body.append(line[indent:])
     while body and body[-1] == "":
         body.pop()
     return "\n".join(body) + "\n"
