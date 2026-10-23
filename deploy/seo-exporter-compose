@@ -137,7 +137,7 @@ compose_allowed() {
     printf '%s\n' "compose refused" >&2
     return 1
   fi
-  if grep -Eq 'ports:|docker\.sock|bezkolejki|privileged:' "$file"; then
+  if grep -Eq '(^|[[:space:]])(ports|network_mode|cap_add|pid|ipc|devices|privileged):|docker\.sock|bezkolejki' "$file"; then
     printf '%s\n' "compose refused" >&2
     return 1
   fi

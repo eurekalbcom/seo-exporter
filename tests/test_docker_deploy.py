@@ -11,6 +11,7 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -208,12 +209,19 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "mem_limit: 128m" in text
     assert "pids_limit: 64" in text
     assert "prom/prometheus:v3.15.1@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae" in text
-    assert "create_host_path: false" in text
-    assert "--enable-feature=agent" in (ROOT / "deploy" / "prometheus-agent-entrypoint.sh").read_text(encoding="utf-8")
+    assert "create_host_path" not in text
+    assert "volumes:" not in text
+    assert _compose_config_content(text) == (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
+    flags = _agent_command(text)
+    assert "--agent" in flags
+    assert "--storage.agent.path=/prometheus" in flags
+    assert all("enable-feature" not in flag for flag in flags)
     agent = (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
     assert "seo-exporter:9108" in agent
     assert "regex: seo_.*" in agent
-    assert "http://100.122.36.23:${SEO_REMOTE_WRITE_PORT}/api/v1/write" in agent
+    assert "follow_redirects: false" in agent
+    assert "sample_limit: 1000" in agent
+    assert "http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write" in agent
     assert "100.122.36.23:" + "9" not in agent
     assert "expose:" not in text
     assert "ports:" not in text
@@ -251,6 +259,8 @@ def test_workflow_contract() -> None:
     assert "environment:" not in publish
     assert "packages: write" not in deploy_job
     assert "packages: read" in deploy_job
+    assert "vars.SEO_REMOTE_WRITE_PORT" in deploy_job
+    assert "SEO_REMOTE_WRITE_PORT:-" not in deploy
     assert "bash deploy/verify_rollback.sh" in deploy_job
     assert deploy_job.index("bash deploy/verify_rollback.sh") < deploy_job.index("git checkout --detach")
     assert "environment: seo-readonly" in deploy_job
@@ -264,17 +274,28 @@ def test_workflow_contract() -> None:
         assert _SHA.fullmatch(pin)
     readme = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
     assert 'command="/usr/local/sbin/seo-exporter-compose"' in readme
-    assert 'from="<CI_NODE_TAILNET_IP>"' in readme
+    assert 'from="100.64.0.0/10"' in readme
+    assert "ephemeral" in readme
+    assert "CI_NODE_TAILNET_IP" not in readme
+    assert "/srv/seo-exporter/deploy" in readme
+    assert "0750" in readme
     assert "no-pty,no-port-forwarding,no-agent-forwarding" in readme
     assert "sha256sum docker-compose.yml" in readme
     assert "/opt/seo-exporter" not in readme
     assert "3000" not in readme
     root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert 'from="<CI_NODE_TAILNET_IP>"' in root_readme
+    assert 'from="100.64.0.0/10"' in root_readme
+    assert "ephemeral" in root_readme
+    assert "0750" in root_readme
+    assert "/srv/seo-exporter/deploy" in root_readme
+    assert "CI_NODE_TAILNET_IP" not in root_readme
     assert "/srv/seo-exporter" in root_readme
     assert "9108" in root_readme
     assert "/opt/seo-exporter" not in root_readme
     assert "3000" not in root_readme
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert "SEO_REMOTE_WRITE_PORT" not in ci
+    assert "prometheus-agent-entrypoint" not in ci
     assert "EUK_SSH_SEO_DEPLOY_V8QX" in readme
     assert "witold216" in readme
     assert "previous digest" in readme or "previous image digest" in readme
@@ -639,13 +660,18 @@ def _replace_env_line(text: str, prefix: str, new_line: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _run_forced(tmp_path: Path, stdin: str) -> subprocess.CompletedProcess[str]:
+def _run_forced(
+    tmp_path: Path,
+    stdin: str,
+    compose: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     root = tmp_path / "srv"
     if root.exists():
         shutil.rmtree(root)
     root.mkdir()
     (root / "data").mkdir()
-    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
+    if compose is None:
+        compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
     (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -836,56 +862,233 @@ def test_build_push_refuses_other_registry_before_docker(tmp_path: Path) -> None
     assert not marker.exists()
 
 
-def test_agent_entrypoint_renders_port(tmp_path: Path) -> None:
-    template = tmp_path / "template.yml"
-    template.write_text(
-        (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    rendered = tmp_path / "rendered.yml"
-    args = tmp_path / "args"
-    stub = tmp_path / "prometheus"
-    stub.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$PROM_ARGS\"\n",
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-    env = os.environ.copy()
-    env.update(
-        {
-            "PROM_TEMPLATE": str(template),
-            "PROM_RENDERED": str(rendered),
-            "PROMETHEUS_BIN": str(stub),
-            "PROM_STORAGE": str(tmp_path / "wal"),
-            "PROM_ARGS": str(args),
-            "SEO_REMOTE_WRITE_PORT": "9",
-        }
-    )
+_PORT_TOKEN = "${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}"
+
+
+def _compose_config_content(text: str) -> str:
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip() == "content: |")
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.strip() == "":
+            body.append("")
+            continue
+        if not line.startswith("      "):
+            break
+        body.append(line[6:])
+    while body and body[-1] == "":
+        body.pop()
+    return "\n".join(body) + "\n"
+
+
+def _agent_command(text: str) -> list[str]:
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line == "  prometheus-agent:")
+    flags: list[str] = []
+    in_command = False
+    for line in lines[start + 1 :]:
+        if line and not line.startswith(" "):
+            break
+        if line.startswith("  ") and not line.startswith("    ") and line.strip():
+            break
+        if line.strip() == "command:":
+            in_command = True
+            continue
+        if not in_command:
+            continue
+        if line.startswith("      - "):
+            flags.append(line[len("      - ") :])
+            continue
+        if line.strip() == "":
+            continue
+        break
+    return flags
+
+
+def _pinned_agent_image(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("image: prom/prometheus:"):
+            return stripped.split("image: ", 1)[1]
+    raise AssertionError("agent image missing")
+
+
+def _docker_daemon() -> bool:
     completed = subprocess.run(
-        ["sh", str(ROOT / "deploy" / "prometheus-agent-entrypoint.sh")],
-        env=env,
+        ["docker", "info"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return completed.returncode == 0
+
+
+def _ephemeral_port() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return str(sock.getsockname()[1])
+
+
+def _render_agent_config(port: str) -> str:
+    raw = (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
+    assert raw.count(_PORT_TOKEN) == 1
+    rendered = raw.replace(_PORT_TOKEN, port)
+    assert _PORT_TOKEN not in rendered
+    assert "SEO_REMOTE_WRITE_PORT" not in rendered
+    return rendered
+
+
+@pytest.mark.parametrize("key", ["network_mode", "cap_add", "pid", "ipc", "devices"])
+def test_forced_command_refuses_compose_denylist(tmp_path: Path, key: str) -> None:
+    compose = (
+        "name: seo-exporter\nservices:\n  seo-exporter:\n"
+        f"    image: example\n    {key}: host\n"
+    )
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    completed = _run_forced(tmp_path, _valid_wrapper_env(compose_sha), compose)
+    assert completed.returncode == 1
+    assert "compose refused" in completed.stderr
+    assert not (tmp_path / "docker-ran").exists()
+
+
+def test_forced_command_allows_pids_limit(tmp_path: Path) -> None:
+    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n    pids_limit: 128\n"
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    completed = _run_forced(tmp_path, _valid_wrapper_env(compose_sha), compose)
+    assert completed.returncode == 0, completed.stderr
+    assert (tmp_path / "docker-ran").exists()
+
+
+def test_real_compose_passes_denylist(tmp_path: Path) -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    completed = _run_forced(tmp_path, _valid_wrapper_env(compose_sha), compose)
+    assert completed.returncode == 0, completed.stderr
+    assert (tmp_path / "docker-ran").exists()
+
+
+def test_promtool_checks_rendered_agent_config(tmp_path: Path) -> None:
+    if not _docker_daemon():
+        pytest.skip("docker daemon unavailable")
+    image = _pinned_agent_image((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    raw = tmp_path / "raw.yml"
+    raw.write_text((ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8"), encoding="utf-8")
+    raw.chmod(0o444)
+    raw_check = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "promtool",
+            "-v",
+            f"{raw}:/cfg.yml:ro",
+            image,
+            "check",
+            "config",
+            "/cfg.yml",
+        ],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert completed.returncode == 0, completed.stderr
-    body = rendered.read_text(encoding="utf-8")
-    assert "http://100.122.36.23:9/api/v1/write" in body
-    assert "SEO_REMOTE_WRITE_PORT" not in body
-    recorded = args.read_text(encoding="utf-8")
-    assert "--enable-feature=agent" in recorded
-    assert "--web.listen-address=127.0.0.1:9090" in recorded
-    for bad in ("", "0", "65536", "08", "abc"):
-        env["SEO_REMOTE_WRITE_PORT"] = bad
-        rejected = subprocess.run(
-            ["sh", str(ROOT / "deploy" / "prometheus-agent-entrypoint.sh")],
-            env=env,
+    assert raw_check.returncode != 0
+    assert "SEO_REMOTE_WRITE_PORT" in raw_check.stdout + raw_check.stderr
+    rendered = tmp_path / "rendered.yml"
+    rendered.write_text(_render_agent_config(_ephemeral_port()), encoding="utf-8")
+    rendered.chmod(0o444)
+    checked = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "promtool",
+            "-v",
+            f"{rendered}:/cfg.yml:ro",
+            image,
+            "check",
+            "config",
+            "/cfg.yml",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "SUCCESS" in checked.stdout
+
+
+def test_pinned_agent_becomes_ready(tmp_path: Path) -> None:
+    if not _docker_daemon():
+        pytest.skip("docker daemon unavailable")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    flags = _agent_command(compose)
+    assert "--agent" in flags
+    assert "--storage.agent.path=/prometheus" in flags
+    assert all("enable-feature" not in flag for flag in flags)
+    rendered = tmp_path / "prometheus.yml"
+    rendered.write_text(_render_agent_config(_ephemeral_port()), encoding="utf-8")
+    rendered.chmod(0o444)
+    name = "seo-agent-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:12]
+    image = _pinned_agent_image(compose)
+    started = subprocess.run(
+        [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--user",
+            "65534:65534",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--tmpfs",
+            "/prometheus:uid=65534,gid=65534,mode=0750",
+            "--tmpfs",
+            "/tmp:uid=65534,gid=65534,mode=1770",
+            "-v",
+            f"{rendered}:/etc/prometheus/prometheus.yml:ro",
+            image,
+            *flags,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert started.returncode == 0, started.stderr
+    try:
+        ready = ""
+        for _ in range(20):
+            probe = subprocess.run(
+                ["docker", "exec", name, "wget", "-qO-", "http://127.0.0.1:9090/-/ready"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if probe.returncode == 0:
+                ready = probe.stdout
+                break
+            time.sleep(0.5)
+        logs = subprocess.run(
+            ["docker", "logs", name],
             check=False,
             capture_output=True,
             text=True,
         )
-        assert rejected.returncode == 1
-        assert "SEO_REMOTE_WRITE_PORT rejected" in rejected.stderr
+        assert "Ready" in ready, logs.stdout + logs.stderr
+        state = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Status}}", name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert state.stdout.strip() == "running"
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def test_forced_command_rejects_remote_write_port(tmp_path: Path) -> None:

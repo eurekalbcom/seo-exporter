@@ -1,18 +1,26 @@
 #!/bin/bash
-# Render the compose file with the placeholder env. Remove a temp env file afterwards.
+# Validate compose structure without a receiver port, then require the port.
 set -euo pipefail
 unset CDPATH
-
-if [[ -z "${SEO_REMOTE_WRITE_PORT:-}" ]]; then
-  printf '%s\n' "SEO_REMOTE_WRITE_PORT is required" >&2
-  exit 1
-fi
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
 env_dir="${root}/data"
 env_file="${env_dir}/.env"
+stderr=$(mktemp)
 created_file=0
 created_dir=0
+
+cleanup() {
+  rm -f -- "$stderr"
+  if [[ "$created_file" -eq 1 ]]; then
+    rm -f -- "$env_file"
+  fi
+  if [[ "$created_dir" -eq 1 ]]; then
+    rmdir "$env_dir" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
 if [[ ! -f "$env_file" ]]; then
   if [[ ! -d "$env_dir" ]]; then
     mkdir -p "$env_dir"
@@ -22,14 +30,19 @@ if [[ ! -f "$env_file" ]]; then
   chmod 600 "$env_file"
   created_file=1
 fi
+
+docker compose --project-directory "$root" --env-file "$env_file" config --no-interpolate >/dev/null
+
 set +e
-docker compose --project-directory "$root" --env-file "$env_file" config
+env -u SEO_REMOTE_WRITE_PORT docker compose --project-directory "$root" --env-file "$env_file" config >/dev/null 2>"$stderr"
 status=$?
 set -e
-if [[ "$created_file" -eq 1 ]]; then
-  rm -f -- "$env_file"
+if [[ "$status" -eq 0 ]]; then
+  printf '%s\n' "SEO_REMOTE_WRITE_PORT default refused" >&2
+  exit 1
 fi
-if [[ "$created_dir" -eq 1 ]]; then
-  rmdir "$env_dir" 2>/dev/null || true
+if ! grep -q 'SEO_REMOTE_WRITE_PORT' "$stderr"; then
+  cat "$stderr" >&2
+  printf '%s\n' "SEO_REMOTE_WRITE_PORT was not required" >&2
+  exit 1
 fi
-exit "$status"

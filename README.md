@@ -53,14 +53,14 @@ Use this when a credential leaks or is suspected to have leaked:
 
 ## Docker deploy
 
-The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push). The publish job pushes the image (`packages: write`, no EUK secrets). The deploy job is the `seo-readonly` environment (reviewer Jan, branch `main`) and does not have `packages: write`. Host install via systemd or a root sudoers installer is rejected. The container rejects `WRITE_MODE` and `AUTH_TRUST_HOST` if they are set. This service has no write API and does not trust `X-Forwarded-Host`. Inside the container the metrics server binds `0.0.0.0` on port `9108`. The host directory is `/srv/seo-exporter`. The host does not publish that port. A Prometheus agent on the same compose network remote-writes `seo_*` series to `100.122.36.23`. The receiver port is `SEO_REMOTE_WRITE_PORT` and has no default. See [deploy/README.md](deploy/README.md) for the forced command, the host layout, and rollback by previous image digest.
+The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push). The publish job pushes the image (`packages: write`, no EUK secrets). The deploy job is the `seo-readonly` environment (reviewer Jan, branch `main`) and does not have `packages: write`. Host install via systemd or a root sudoers installer is rejected. The container rejects `WRITE_MODE` and `AUTH_TRUST_HOST` if they are set. This service has no write API and does not trust `X-Forwarded-Host`. Inside the container the metrics server binds `0.0.0.0` on port `9108`. The host directory `/srv/seo-exporter` is owned by root, group `seo-deploy`, mode `0750`. `/srv/seo-exporter/deploy` is not mounted. If that directory is present it has the same owner, group, and mode. The host does not publish that port. A Prometheus agent on the same compose network remote-writes `seo_*` series to `100.122.36.23`. The receiver port is `SEO_REMOTE_WRITE_PORT` and has no default. See [deploy/README.md](deploy/README.md) for the forced command, the host layout, and rollback by previous image digest.
 
 The compose digest is the raw SHA-256 of `docker-compose.yml`. Compute it with `sha256sum docker-compose.yml` and take the first field. That 64-character hex value is `SEO_COMPOSE_SHA256`.
 
-Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). `<CI_NODE_TAILNET_IP>` stays a placeholder until CISO approves the CI node address. Do not put a real key or that address in the repo.
+Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). The CI node is ephemeral, so `from=` uses the tailnet CGNAT range `100.64.0.0/10` instead of one address. Do not put a real key in the repo.
 
 ```
-from="<CI_NODE_TAILNET_IP>",restrict,command="/usr/local/sbin/seo-exporter-compose",no-pty,no-port-forwarding,no-agent-forwarding ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
+from="100.64.0.0/10",restrict,command="/usr/local/sbin/seo-exporter-compose",no-pty,no-port-forwarding,no-agent-forwarding ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
 ```
 
 ## SEO Autopilot (EUR-407)

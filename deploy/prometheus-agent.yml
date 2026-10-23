@@ -5,12 +5,14 @@ global:
 scrape_configs:
   - job_name: seo-exporter
     metrics_path: /metrics
+    sample_limit: 1000
     static_configs:
       - targets:
           - seo-exporter:9108
 
 remote_write:
-  - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT}/api/v1/write
+  - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
+    follow_redirects: false
     write_relabel_configs:
       - source_labels: [__name__]
         regex: seo_.*
