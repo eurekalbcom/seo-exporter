@@ -16,7 +16,7 @@ from seo_exporter.logging_redact import Redactor
 from seo_exporter.metrics import Registry
 from seo_exporter.oauth import AccessSession
 from seo_exporter.providers import ProviderError
-from seo_exporter.server import assert_loopback, make_server
+from seo_exporter.server import assert_bind_allowed, make_server
 from seo_exporter.service import run_once
 from seo_exporter.settings import Settings, load_settings
 
@@ -182,8 +182,10 @@ def test_settings_and_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.port == 9108
     assert settings.interval_seconds == 3600
     host = ".".join(("203", "0", "113", "10"))
+    assert_bind_allowed("0.0.0.0")
+    assert_bind_allowed("127.0.0.1")
     with pytest.raises(SystemExit):
-        assert_loopback(host)
+        assert_bind_allowed(host)
     monkeypatch.setenv("SEO_EXPORTER_GSC_SITE", "  ")
     with pytest.raises(SystemExit):
         load_settings()
@@ -213,6 +215,22 @@ def test_metrics_server(caplog: pytest.LogCaptureFixture) -> None:
         assert caught.value.code == 404
         assert 'seo_exporter_up{provider="gsc"} 1' in body
         assert SENTINEL not in caplog.text
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_all_interfaces_bind_accepts_loopback_client() -> None:
+    registry = Registry()
+    server = make_server("0.0.0.0", 0, registry)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=2) as response:
+            assert response.read() == b"ok\n"
     finally:
         server.shutdown()
         server.server_close()

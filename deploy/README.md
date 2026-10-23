@@ -1,6 +1,6 @@
 # Docker deploy (witold216)
 
-Read-only GSC and Bing exporter, packaged as a container. The Python package is the tree from `efe4041d220559ae64487d7c42b4493275d65264` on `cursor/seo-readonly-exporter-8756`. That branch is not modified by this deploy.
+Read-only GSC and Bing exporter, packaged as a container, plus a Prometheus agent on the same compose network. The metrics bind allowlist accepts `0.0.0.0` in addition to the loopback literals. The container entrypoint forces `0.0.0.0`.
 
 The target host is **witold216** (develop). The workflow does not hardcode the address. It reads `EUK_VAR_SEO_TARGET_HOST`.
 
@@ -70,36 +70,48 @@ The deploy job has `packages: read` so that inspect can log in with `github.toke
 
 The runner builds an env file at mode `0600` and passes it on stdin to `docker compose pull`. The body is at most 64 KiB (65536 bytes). Provider JSON and the SSH key are environment variables on the runner, then the file body. They are not command-line arguments and they are not echoed.
 
-The file has exactly these six keys, each once: `SEO_EXPORTER_IMAGE`, `SEO_EXPORTER_GSC_SITE`, `SEO_EXPORTER_BING_SITE`, `SEO_EXPORTER_GSC_JSON`, `SEO_EXPORTER_BING_JSON`, `SEO_COMPOSE_SHA256`. Comments, blank lines, and any other key are refused. `WRITE_MODE` and `AUTH_TRUST_HOST` are not keys of this file. The two site values and both JSON values are single-quoted and must not contain a single quote. Compose then treats `${...}` inside them as literal text.
+The file has exactly these seven keys, each once: `SEO_EXPORTER_IMAGE`, `SEO_EXPORTER_GSC_SITE`, `SEO_EXPORTER_BING_SITE`, `SEO_EXPORTER_GSC_JSON`, `SEO_EXPORTER_BING_JSON`, `SEO_REMOTE_WRITE_PORT`, `SEO_COMPOSE_SHA256`. Comments, blank lines, and any other key are refused. `WRITE_MODE` and `AUTH_TRUST_HOST` are not keys of this file. The two site values and both JSON values are single-quoted and must not contain a single quote. Compose then treats `${...}` inside them as literal text. `SEO_REMOTE_WRITE_PORT` is an unquoted integer from 1 to 65535 with no leading zero and no default. The deploy job reads it from the repository variable `SEO_REMOTE_WRITE_PORT`. Until that variable exists, deploy fails closed.
 
-The forced command writes `/srv/seo-exporter/.env` at mode `0600` only after `docker compose pull` succeeds. A failed pull restores the previous file. `docker compose up -d` and `docker compose ps` refuse stdin. The wrapper unsets every exported `COMPOSE_*` variable and always runs `docker compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter`. `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, and `COMPOSE_PROFILES` cannot point the pull at another file.
+The forced command writes `/srv/seo-exporter/data/.env` at mode `0600` only after `docker compose pull` succeeds. A failed pull restores the previous file. `docker compose up -d` and `docker compose ps` refuse stdin. The wrapper unsets every exported `COMPOSE_*` variable and always runs `docker compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter`. `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, and `COMPOSE_PROFILES` cannot point the pull at another file.
 
-The container entrypoint copies the JSON into `/run/credentials/seo-exporter/{gsc,bing}.json` (mode `0400`) and removes those variables from the process environment before `python -m seo_exporter`. If `WRITE_MODE` or `AUTH_TRUST_HOST` is set, the process exits before writing credentials. This service has no write API and does not trust `X-Forwarded-Host`. `docker compose config` on a host that has the real env file will print it. Do not capture that output. Use `deploy/env.example` for local renders.
+`SEO_COMPOSE_SHA256` is the SHA-256 of the raw bytes of `/srv/seo-exporter/docker-compose.yml`. Compute the same value from the deployed file:
 
-`SEO_EXPORTER_BIND` is forced to `127.0.0.1` and the state directory is forced to `/var/lib/seo-exporter`. The env file cannot move either one. The process still refuses a non-loopback bind. The port is not exposed on the compose network. Scraping from outside the container is a separate GO.
+```bash
+sha256sum docker-compose.yml
+```
+
+Use the first field, 64 lowercase hex characters, with no `sha256:` prefix. The wrapper runs `sha256sum` on the host file and refuses the deploy when the fields differ.
+
+The container entrypoint copies the JSON into `/run/credentials/seo-exporter/{gsc,bing}.json` (mode `0400`) and removes those variables from the process environment before `python -m seo_exporter`. If `WRITE_MODE` or `AUTH_TRUST_HOST` is set, the process exits before writing credentials. This service has no write API and does not trust `X-Forwarded-Host`. `docker compose config` on a host that has the real env file will print it. Do not capture that output. Use `deploy/env.example` for local renders, and export `SEO_REMOTE_WRITE_PORT` yourself. The example file does not contain a port.
+
+`SEO_EXPORTER_BIND` is forced to `0.0.0.0` and the state directory is forced to `/var/lib/seo-exporter`. The env file cannot move either one. The process allowlist is `127.0.0.1`, `::1`, and `0.0.0.0`. Any other bind string still exits. The host does not publish port `9108`. The Prometheus agent scrapes `seo-exporter:9108` on `seo-exporter_net` and remote-writes only series whose names match `seo_.*` to `http://100.122.36.23:<SEO_REMOTE_WRITE_PORT>/api/v1/write`. There is no token in the repo. The agent config and its entrypoint are mounted read-only from `/srv/seo-exporter/deploy/`. Those two files are not covered by `SEO_COMPOSE_SHA256`.
 
 ## Host layout on witold216
 
 One-time admin bootstrap. This is not the rejected root installer: there is no sudoers file and no unit.
 
-- Account `seo-deploy` exists, is not uid 0, has a locked password, and is not in the sudo group.
+- Account `seo-deploy` exists, is not uid 0, has a locked password, and is not in the sudo group. Its group is `seo-deploy`.
 - Rootless Docker for that account. The socket is `/run/user/<uid>/docker.sock`. The forced command refuses `/var/run/docker.sock` and `/run/docker.sock`.
-- Directory `/srv/seo-exporter` is owned by `seo-deploy`, mode `0750`.
-- `docker-compose.yml` in that directory is a byte copy of the file in the deployed SHA. The env file carries its SHA-256. A mismatch refuses the deploy.
+- Directory `/srv/seo-exporter` is owned by root, group `seo-deploy`, mode `0750`. The deploy user can enter it and cannot replace files there.
+- `docker-compose.yml` in that directory is owned by root, group `seo-deploy`, mode `0640`. It is a byte copy of the file in the deployed SHA.
+- Directory `/srv/seo-exporter/data` is owned by `seo-deploy`, mode `0750`. The wrapper writes `.env` there.
+- `/srv/seo-exporter/deploy/prometheus-agent.yml` and `/srv/seo-exporter/deploy/prometheus-agent-entrypoint.sh` are byte copies of the same paths in the repo, owned by root, group `seo-deploy`, mode `0444`.
 - `/usr/local/sbin/seo-exporter-compose` is a root-owned copy of `deploy/seo-exporter-compose`, mode `0755`. The deploy user cannot rewrite it.
-- One-time `docker login ghcr.io --password-stdin` as `seo-deploy`, so `docker compose pull` can read the private package. This PR does not create that credential.
+- One-time `docker login ghcr.io --password-stdin` as `seo-deploy`, so `docker compose pull` can read the private package. This PR does not create that credential. The agent image is the public `prom/prometheus` pin in the compose file.
 
-The compose project name is `seo-exporter`. Its only network is `seo-exporter_net`. It does not join another project's networks or volumes, does not mount the Docker socket, does not publish or expose a port, drops all capabilities, sets `no-new-privileges`, and uses a read-only root filesystem with tmpfs for `/run/credentials`, `/var/lib/seo-exporter`, and `/tmp`.
+The image workdir `/srv/seo-exporter` is the Python tree inside the container. It is not a mount of the host directory.
+
+The compose project name is `seo-exporter`. Its only network is `seo-exporter_net`, and only the exporter and the agent attach to it. It does not join another project's networks or volumes, does not mount the Docker socket, and does not publish a host port. The exporter drops all capabilities, sets `no-new-privileges`, sets `mem_limit: 256m` and `pids_limit: 128`, and uses a read-only root filesystem with tmpfs for `/run/credentials`, `/var/lib/seo-exporter`, and `/tmp`. The agent uses the same capability drop and read-only root, with `mem_limit: 128m` and `pids_limit: 64`, and tmpfs for its WAL. The network is not internal, because the exporter calls Google and Bing and the agent remote-writes to `100.122.36.23`.
 
 ## authorized_keys
 
-Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). Replace the key placeholder with the public key for `EUK_SSH_SEO_DEPLOY_W216`.
+Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). Replace the key placeholder with the public key for `EUK_SSH_SEO_DEPLOY_W216`. `<CI_NODE_TAILNET_IP>` stays a placeholder until CISO approves the CI node address.
 
 ```
-restrict,command="/usr/local/sbin/seo-exporter-compose" ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
+from="<CI_NODE_TAILNET_IP>",restrict,command="/usr/local/sbin/seo-exporter-compose",no-pty,no-port-forwarding,no-agent-forwarding ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
 ```
 
-`restrict` disables TTY, port forwarding, agent forwarding, and X11. The command wrapper accepts only these `SSH_ORIGINAL_COMMAND` values. It runs them in `/srv/seo-exporter` and adds `-f /srv/seo-exporter/docker-compose.yml -p seo-exporter` itself:
+`restrict` disables TTY, port forwarding, agent forwarding, and X11. The explicit `no-pty`, `no-port-forwarding`, and `no-agent-forwarding` flags state the same limits on the line. `from=` limits the key to the CI node address once CISO names it. The command wrapper accepts only these `SSH_ORIGINAL_COMMAND` values. It runs them in `/srv/seo-exporter` and adds `--env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter` itself:
 
 - `docker compose pull`
 - `docker compose up -d`
@@ -112,9 +124,10 @@ Any other command, including a shell, is refused. The account has no sudo.
 ```bash
 python3 -m pip install -r requirements-dev.txt
 python3 -m pytest
-shellcheck deploy/sha_guard.sh deploy/ssh_deploy.sh deploy/build_push.sh deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh deploy/verify_rollback.sh
+shellcheck deploy/sha_guard.sh deploy/ssh_deploy.sh deploy/build_push.sh deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh deploy/verify_rollback.sh deploy/prometheus-agent-entrypoint.sh
 bash deploy/check_workflows.sh
 hadolint Dockerfile
 actionlint
-bash deploy/compose_config.sh
+# 9 renders the file only. It is not the receiver port.
+SEO_REMOTE_WRITE_PORT=9 bash deploy/compose_config.sh
 ```

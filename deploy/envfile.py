@@ -105,6 +105,28 @@ def require_credential(name: str, raw: str | None) -> str:
         raise ValueError(f"{name} rejected") from None
 
 
+def require_port(raw: str | None) -> str:
+    """Return a TCP port with no default.
+
+    Args:
+        raw: ``SEO_REMOTE_WRITE_PORT`` from the environment.
+
+    Returns:
+        Decimal text from 1 to 65535, without leading zeros.
+
+    Raises:
+        ValueError: The value is missing or not an allowed port.
+    """
+    if raw is None or not raw.strip():
+        raise ValueError("SEO_REMOTE_WRITE_PORT missing")
+    value = raw.strip()
+    if re.fullmatch(r"[1-9][0-9]{0,4}", value) is None:
+        raise ValueError("SEO_REMOTE_WRITE_PORT rejected")
+    if int(value) > 65535:
+        raise ValueError("SEO_REMOTE_WRITE_PORT rejected")
+    return value
+
+
 def compose_sha256(path: Path) -> str:
     """Hash the compose file that must be installed on the host.
 
@@ -128,6 +150,7 @@ def render_env(
     bing_site: str,
     gsc_json: str,
     bing_json: str,
+    remote_write_port: str,
     compose_sha: str,
 ) -> str:
     """Render the env file body.
@@ -138,6 +161,7 @@ def render_env(
         bing_site: Bing site.
         gsc_json: Canonical Google credential JSON.
         bing_json: Canonical Bing credential JSON.
+        remote_write_port: Receiver port.
         compose_sha: SHA-256 of ``docker-compose.yml``.
 
     Returns:
@@ -150,12 +174,14 @@ def render_env(
         raise ValueError("image digest rejected")
     if not _SHA256.fullmatch(compose_sha):
         raise ValueError("compose hash rejected")
+    port = require_port(remote_write_port)
     lines = (
         f"SEO_EXPORTER_IMAGE={image}",
         f"SEO_EXPORTER_GSC_SITE={quote_single(gsc_site)}",
         f"SEO_EXPORTER_BING_SITE={quote_single(bing_site)}",
         f"SEO_EXPORTER_GSC_JSON={quote_single(gsc_json)}",
         f"SEO_EXPORTER_BING_JSON={quote_single(bing_json)}",
+        f"SEO_REMOTE_WRITE_PORT={port}",
         f"SEO_COMPOSE_SHA256={compose_sha}",
     )
     text = "\n".join(lines) + "\n"
@@ -224,8 +250,17 @@ def build_from_environ(environ: Mapping[str, str] | None = None) -> str:
     bing_json = require_credential("BING_JSON", env.get("BING_JSON"))
     gsc_site = require_site("GSC_SITE", env.get("GSC_SITE"))
     bing_site = require_site("BING_SITE", env.get("BING_SITE"))
+    remote_write_port = require_port(env.get("SEO_REMOTE_WRITE_PORT"))
     compose = compose_sha256(Path(env.get("COMPOSE_FILE", "docker-compose.yml")))
-    return render_env(image, gsc_site, bing_site, gsc_json, bing_json, compose)
+    return render_env(
+        image,
+        gsc_site,
+        bing_site,
+        gsc_json,
+        bing_json,
+        remote_write_port,
+        compose,
+    )
 
 
 def main() -> int:

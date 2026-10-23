@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           shellcheck deploy/sha_guard.sh deploy/ssh_deploy.sh deploy/build_push.sh \
             deploy/seo-exporter-compose deploy/check_workflows.sh deploy/compose_config.sh \
-            deploy/verify_rollback.sh
+            deploy/verify_rollback.sh deploy/prometheus-agent-entrypoint.sh
 
       - name: Workflow policy
         run: bash deploy/check_workflows.sh
@@ -140,4 +140,7 @@ jobs:
           "${workdir}/hadolint" Dockerfile
 
       - name: Compose config
+        env:
+          # Render fixture so compose can interpolate. Not the receiver port.
+          SEO_REMOTE_WRITE_PORT: "9"
         run: bash deploy/compose_config.sh

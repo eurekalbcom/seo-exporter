@@ -1,4 +1,4 @@
-"""Localhost-only HTTP server for Prometheus scrapes."""
+"""HTTP server for Prometheus scrapes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from seo_exporter.metrics import Registry
 
 logger = logging.getLogger("seo_exporter")
-_LOOPBACK = frozenset({"127.0.0.1", "::1"})
+_BIND_ALLOWED = frozenset({"127.0.0.1", "::1", "0.0.0.0"})
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -45,24 +45,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def assert_loopback(host: str) -> None:
-    """Reject bind addresses that are not loopback literals.
+def assert_bind_allowed(host: str) -> None:
+    """Reject bind addresses outside the metrics allowlist.
 
     Args:
         host: Address string.
 
     Raises:
-        SystemExit: ``host`` is not ``127.0.0.1`` or ``::1``.
+        SystemExit: ``host`` is not an allowed literal.
     """
-    if host not in _LOOPBACK:
-        raise SystemExit("metrics bind address must be loopback")
+    if host not in _BIND_ALLOWED:
+        raise SystemExit("metrics bind address is not allowed")
 
 
 def make_server(host: str, port: int, registry: Registry) -> ThreadingHTTPServer:
-    """Bind an HTTP server to a loopback address.
+    """Bind an HTTP server to an allowed address.
 
     Args:
-        host: Loopback literal.
+        host: Allowlisted address literal.
         port: TCP port. ``0`` selects an ephemeral port.
         registry: Metrics registry served at ``/metrics``.
 
@@ -70,9 +70,9 @@ def make_server(host: str, port: int, registry: Registry) -> ThreadingHTTPServer
         A server that has not yet been started.
 
     Raises:
-        SystemExit: The bind address is not loopback.
+        SystemExit: The bind address is not allowed.
     """
-    assert_loopback(host)
+    assert_bind_allowed(host)
     _Handler.registry = registry
     server = ThreadingHTTPServer((host, port), _Handler)
     server.daemon_threads = True

@@ -39,13 +39,13 @@ _EXPORTER_SHA256 = {
     "seo_exporter/oauth.py": "17e18af0602df864b5bd79cc3ec68d648fd87b127551bcfd9fd2f60a1bb5a9e0",
     "seo_exporter/providers.py": "e21b01d807c56ebc07da229a242b694aa6b76f768f23b56f3d30c761c9b4f259",
     "seo_exporter/refresh_store.py": "c4c79bd44151dc947b084da8b610a34f07c6a19643c7a9b5518c778777ee6f34",
-    "seo_exporter/server.py": "211072c87985e97f30551572ba75ba49b79752828f150a88841dce6ea4c39074",
+    "seo_exporter/server.py": "94195a07884aa73ce0049e098a26f9a535c996076add952084225d3fa46fa2f6",
     "seo_exporter/service.py": "861e9eb2941d0846a1e9891b74ee6f783d6c18fe44e501e297f89b3b4ff71005",
     "seo_exporter/settings.py": "743c688aa74205b4802a52c2dc26012b44f86f83c2a9472d4cd6d43b014ae31e",
     "tests/test_credentials.py": "f3bdf98a132e7047a9135002d27c272585346dbfaf1e54f40ec510a783224516",
     "tests/test_oauth_http.py": "92c669b9bc7b0c8d96a7b8495479345663967fe9aef3456caa5afc6e5828bc80",
     "tests/test_providers.py": "ef298763de78232257a0a37a7a28a409fd347f2010e1a23b525712cec619dcb6",
-    "tests/test_service.py": "78c6db76158cad08512f2a9dd4eb9d09fecb9cef6e0a6ae274ded0e2e6c2460c",
+    "tests/test_service.py": "69a69135712a4e974b54622bda3cdfb674df4c9971f5c2c01614794377af2287",
 }
 
 
@@ -68,6 +68,7 @@ def _base_env(tmp_path: Path | None = None) -> dict[str, str]:
         "BING_JSON": _credential("bing-secret-marker"),
         "GSC_SITE": "sc-domain:example.com",
         "BING_SITE": "https://example.invalid/",
+        "SEO_REMOTE_WRITE_PORT": "9",
         "COMPOSE_FILE": str(ROOT / "docker-compose.yml"),
     }
     if tmp_path is not None:
@@ -116,6 +117,7 @@ def test_envfile_mode_and_rejection(tmp_path: Path) -> None:
         "SEO_EXPORTER_BING_SITE",
         "SEO_EXPORTER_GSC_JSON",
         "SEO_EXPORTER_BING_JSON",
+        "SEO_REMOTE_WRITE_PORT",
         "SEO_COMPOSE_SHA256",
     ]
     path = tmp_path / "env"
@@ -126,10 +128,14 @@ def test_envfile_mode_and_rejection(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="GSC_JSON rejected") as caught:
         build_from_environ(rejected)
     assert "not-json-secret" not in str(caught.value)
-    missing = _base_env()
-    missing["BING_JSON"] = " "
-    with pytest.raises(ValueError, match="BING_JSON missing"):
-        build_from_environ(missing)
+    missing_port = _base_env()
+    missing_port["SEO_REMOTE_WRITE_PORT"] = " "
+    with pytest.raises(ValueError, match="SEO_REMOTE_WRITE_PORT missing"):
+        build_from_environ(missing_port)
+    bad_port = _base_env()
+    bad_port["SEO_REMOTE_WRITE_PORT"] = "65536"
+    with pytest.raises(ValueError, match="SEO_REMOTE_WRITE_PORT rejected"):
+        build_from_environ(bad_port)
 
 
 def test_envfile_cli_does_not_echo(tmp_path: Path) -> None:
@@ -180,7 +186,10 @@ def test_entrypoint_drops_secrets_and_forces_bind(tmp_path: Path) -> None:
     cleaned = runtime_env(source)
     assert "gsc-secret-marker" not in cleaned.values()
     assert "SEO_EXPORTER_GSC_JSON" not in cleaned
-    assert cleaned["SEO_EXPORTER_BIND"] == "127.0.0.1"
+    assert cleaned["SEO_EXPORTER_BIND"] == "0.0.0.0"
+    loopback = dict(source)
+    loopback["SEO_EXPORTER_BIND"] = "127.0.0.1"
+    assert runtime_env(loopback)["SEO_EXPORTER_BIND"] == "0.0.0.0"
     assert cleaned["SEO_EXPORTER_STATE_DIR"] == "/var/lib/seo-exporter"
     assert cleaned["CREDENTIALS_DIRECTORY"] == "/run/credentials/seo-exporter"
     assert cleaned["SEO_EXPORTER_GSC_SITE"] == "sc-domain:example.com"
@@ -192,6 +201,20 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "read_only: true" in text
     assert "no-new-privileges:true" in text
     assert "name: seo-exporter_net" in text
+    assert "SEO_EXPORTER_BIND: 0.0.0.0" in text
+    assert 'SEO_EXPORTER_PORT: "9108"' in text
+    assert "mem_limit: 256m" in text
+    assert "pids_limit: 128" in text
+    assert "mem_limit: 128m" in text
+    assert "pids_limit: 64" in text
+    assert "prom/prometheus:v3.15.1@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae" in text
+    assert "create_host_path: false" in text
+    assert "--enable-feature=agent" in (ROOT / "deploy" / "prometheus-agent-entrypoint.sh").read_text(encoding="utf-8")
+    agent = (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
+    assert "seo-exporter:9108" in agent
+    assert "regex: seo_.*" in agent
+    assert "http://100.122.36.23:${SEO_REMOTE_WRITE_PORT}/api/v1/write" in agent
+    assert "100.122.36.23:" + "9" not in agent
     assert "expose:" not in text
     assert "ports:" not in text
     assert "docker.sock" not in text
@@ -201,6 +224,10 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "USER 10001:10001" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "EXPOSE" not in dockerfile
+    assert "/opt/seo-exporter" not in dockerfile
+    assert "WORKDIR /srv/seo-exporter" in dockerfile
+    assert "SEO_EXPORTER_BIND=0.0.0.0" in dockerfile
+    assert "SEO_EXPORTER_PORT=9108" in dockerfile
     assert "image_digest" not in dockerfile
     assert "@sha256:9b98a8d37794ca093ba8d5afe1ffac52f5a15168b9b4e67594d86c20e14fa681" in dockerfile
     assert "bezkolejki" not in dockerfile
@@ -237,6 +264,17 @@ def test_workflow_contract() -> None:
         assert _SHA.fullmatch(pin)
     readme = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
     assert 'command="/usr/local/sbin/seo-exporter-compose"' in readme
+    assert 'from="<CI_NODE_TAILNET_IP>"' in readme
+    assert "no-pty,no-port-forwarding,no-agent-forwarding" in readme
+    assert "sha256sum docker-compose.yml" in readme
+    assert "/opt/seo-exporter" not in readme
+    assert "3000" not in readme
+    root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert 'from="<CI_NODE_TAILNET_IP>"' in root_readme
+    assert "/srv/seo-exporter" in root_readme
+    assert "9108" in root_readme
+    assert "/opt/seo-exporter" not in root_readme
+    assert "3000" not in root_readme
     assert "EUK_SSH_SEO_DEPLOY_V8QX" in readme
     assert "witold216" in readme
     assert "previous digest" in readme or "previous image digest" in readme
@@ -430,6 +468,7 @@ def _listen(path: Path) -> socket.socket:
 def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) -> None:
     root = tmp_path / "srv"
     root.mkdir()
+    (root / "data").mkdir()
     compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
     (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
     compose_sha = hashlib.sha256(compose.encode()).hexdigest()
@@ -440,6 +479,7 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
             "SEO_EXPORTER_BING_SITE='https://example.invalid/'",
             f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
             f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
+            "SEO_REMOTE_WRITE_PORT=9",
             f"SEO_COMPOSE_SHA256={compose_sha}",
             "",
         )
@@ -479,10 +519,10 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
         )
         assert pulled.returncode == 0, pulled.stderr
         assert "gsc-secret-marker" not in pulled.stderr
-        assert stat.S_IMODE((root / ".env").stat().st_mode) == 0o600
-        assert "gsc-secret-marker" in (root / ".env").read_text(encoding="utf-8")
+        assert stat.S_IMODE((root / "data" / ".env").stat().st_mode) == 0o600
+        assert "gsc-secret-marker" in (root / "data" / ".env").read_text(encoding="utf-8")
         docker_log = log.read_text(encoding="utf-8")
-        assert "compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter pull" in docker_log
+        assert "compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter pull" in docker_log
         assert "gsc-secret-marker" not in docker_log
         dumped = env_dump.read_text(encoding="utf-8")
         assert "COMPOSE_FILE=" not in dumped
@@ -498,7 +538,7 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
             text=True,
         )
         assert up.returncode == 0, up.stderr
-        assert "compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter up -d" in log.read_text(
+        assert "compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter up -d" in log.read_text(
             encoding="utf-8"
         )
         ps = subprocess.run(
@@ -510,7 +550,7 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
             text=True,
         )
         assert ps.returncode == 0, ps.stderr
-        assert "compose -f /srv/seo-exporter/docker-compose.yml -p seo-exporter ps" in log.read_text(
+        assert "compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter ps" in log.read_text(
             encoding="utf-8"
         )
         refused = subprocess.run(
@@ -530,10 +570,12 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
 def test_forced_command_restores_env_when_pull_fails(tmp_path: Path) -> None:
     root = tmp_path / "srv"
     root.mkdir()
+    (root / "data").mkdir()
     compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
     (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
     compose_sha = hashlib.sha256(compose.encode()).hexdigest()
-    previous = root / ".env"
+    data = root / "data"
+    previous = data / ".env"
     previous.write_text("previous-env\n", encoding="utf-8")
     previous.chmod(0o600)
     env_text = "\n".join(
@@ -543,6 +585,7 @@ def test_forced_command_restores_env_when_pull_fails(tmp_path: Path) -> None:
             "SEO_EXPORTER_BING_SITE='https://example.invalid/'",
             f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
             f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
+            "SEO_REMOTE_WRITE_PORT=9",
             f"SEO_COMPOSE_SHA256={compose_sha}",
             "",
         )
@@ -571,8 +614,8 @@ def test_forced_command_restores_env_when_pull_fails(tmp_path: Path) -> None:
         assert "gsc-secret-marker" not in failed.stderr
         assert previous.read_text(encoding="utf-8") == "previous-env\n"
         assert stat.S_IMODE(previous.stat().st_mode) == 0o600
-        assert not (root / ".env.prev").exists()
-        assert list(root.glob(".env.*")) == []
+        assert not (data / ".env.prev").exists()
+        assert list(data.glob(".env.*")) == []
     finally:
         listener.close()
 
@@ -585,6 +628,7 @@ def _valid_wrapper_env(compose_sha: str) -> str:
             "SEO_EXPORTER_BING_SITE='https://example.invalid/'",
             f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
             f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
+            "SEO_REMOTE_WRITE_PORT=9",
             f"SEO_COMPOSE_SHA256={compose_sha}",
         )
     ) + "\n"
@@ -600,6 +644,7 @@ def _run_forced(tmp_path: Path, stdin: str) -> subprocess.CompletedProcess[str]:
     if root.exists():
         shutil.rmtree(root)
     root.mkdir()
+    (root / "data").mkdir()
     compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
     (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
     bin_dir = tmp_path / "bin"
@@ -791,10 +836,71 @@ def test_build_push_refuses_other_registry_before_docker(tmp_path: Path) -> None
     assert not marker.exists()
 
 
-def test_envfile_rejects_body_over_64kib() -> None:
+def test_agent_entrypoint_renders_port(tmp_path: Path) -> None:
+    template = tmp_path / "template.yml"
+    template.write_text(
+        (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    rendered = tmp_path / "rendered.yml"
+    args = tmp_path / "args"
+    stub = tmp_path / "prometheus"
+    stub.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$PROM_ARGS\"\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROM_TEMPLATE": str(template),
+            "PROM_RENDERED": str(rendered),
+            "PROMETHEUS_BIN": str(stub),
+            "PROM_STORAGE": str(tmp_path / "wal"),
+            "PROM_ARGS": str(args),
+            "SEO_REMOTE_WRITE_PORT": "9",
+        }
+    )
+    completed = subprocess.run(
+        ["sh", str(ROOT / "deploy" / "prometheus-agent-entrypoint.sh")],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    body = rendered.read_text(encoding="utf-8")
+    assert "http://100.122.36.23:9/api/v1/write" in body
+    assert "SEO_REMOTE_WRITE_PORT" not in body
+    recorded = args.read_text(encoding="utf-8")
+    assert "--enable-feature=agent" in recorded
+    assert "--web.listen-address=127.0.0.1:9090" in recorded
+    for bad in ("", "0", "65536", "08", "abc"):
+        env["SEO_REMOTE_WRITE_PORT"] = bad
+        rejected = subprocess.run(
+            ["sh", str(ROOT / "deploy" / "prometheus-agent-entrypoint.sh")],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert rejected.returncode == 1
+        assert "SEO_REMOTE_WRITE_PORT rejected" in rejected.stderr
+
+
+def test_forced_command_rejects_remote_write_port(tmp_path: Path) -> None:
+    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    valid = _valid_wrapper_env(compose_sha)
+    for port in ("0", "65536", "08", "abc", ""):
+        body = _replace_env_line(valid, "SEO_REMOTE_WRITE_PORT=", f"SEO_REMOTE_WRITE_PORT={port}")
+        completed = _run_forced(tmp_path, body)
+        assert completed.returncode == 1
+        assert "env rejected" in completed.stderr
+        assert not (tmp_path / "docker-ran").exists()
     pad = "p" * 40000
     with pytest.raises(ValueError, match="env file rejected"):
-        render_env(_IMAGE, pad, pad, pad, pad, "ab" * 32)
+        render_env(_IMAGE, pad, pad, pad, pad, "9", "ab" * 32)
 
 
 def test_entrypoint_rejects_write_mode_and_auth_trust_host() -> None:
@@ -807,6 +913,7 @@ def test_entrypoint_rejects_write_mode_and_auth_trust_host() -> None:
 def test_rendered_env_quotes_sites_and_json_for_compose(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
+    (project / "data").mkdir()
     shutil.copy(ROOT / "docker-compose.yml", project / "docker-compose.yml")
     source = _base_env()
     source["COMPOSE_FILE"] = str(project / "docker-compose.yml")
@@ -821,12 +928,21 @@ def test_rendered_env_quotes_sites_and_json_for_compose(tmp_path: Path) -> None:
     ):
         value = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith(key + "="))
         assert re.fullmatch(r"'[^']+'", value), key
-    (project / ".env").write_text(text, encoding="utf-8")
-    (project / ".env").chmod(0o600)
+    (project / "data" / ".env").write_text(text, encoding="utf-8")
+    (project / "data" / ".env").chmod(0o600)
     env = os.environ.copy()
     env["UNTRUSTED"] = "pwned-marker"
+    env["SEO_REMOTE_WRITE_PORT"] = "9"
     rendered = subprocess.run(
-        ["docker", "compose", "--project-directory", str(project), "config"],
+        [
+            "docker",
+            "compose",
+            "--project-directory",
+            str(project),
+            "--env-file",
+            str(project / "data" / ".env"),
+            "config",
+        ],
         cwd=project,
         env=env,
         check=False,
