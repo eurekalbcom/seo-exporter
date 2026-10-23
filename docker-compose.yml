@@ -43,42 +43,38 @@ services:
     pids_limit: 64
     networks:
       - seo-exporter_net
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --agent
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.agent.path=/prometheus
-      - --web.listen-address=127.0.0.1:9090
-    configs:
-      - source: prometheus_agent
-        target: /etc/prometheus/prometheus.yml
-        mode: 0444
+      - |
+        set -eu
+        printf '%s\n' "$$PROMETHEUS_CONFIG" > /tmp/prometheus.yml
+        exec /bin/prometheus --agent --config.file=/tmp/prometheus.yml --storage.agent.path=/prometheus --web.listen-address=127.0.0.1:9090
+    environment:
+      PROMETHEUS_CONFIG: |
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 10s
+
+        scrape_configs:
+          - job_name: seo-exporter
+            metrics_path: /metrics
+            sample_limit: 1000
+            follow_redirects: false
+            static_configs:
+              - targets:
+                  - seo-exporter:9108
+
+        remote_write:
+          - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
+            follow_redirects: false
+            write_relabel_configs:
+              - source_labels: [__name__]
+                regex: seo_.*
+                action: keep
     tmpfs:
       - /prometheus:uid=65534,gid=65534,mode=0750
       - /tmp:uid=65534,gid=65534,mode=1770
     restart: unless-stopped
-
-configs:
-  prometheus_agent:
-    content: |
-      global:
-        scrape_interval: 30s
-        scrape_timeout: 10s
-
-      scrape_configs:
-        - job_name: seo-exporter
-          metrics_path: /metrics
-          sample_limit: 1000
-          static_configs:
-            - targets:
-                - seo-exporter:9108
-
-      remote_write:
-        - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
-          follow_redirects: false
-          write_relabel_configs:
-            - source_labels: [__name__]
-              regex: seo_.*
-              action: keep
 
 networks:
   seo-exporter_net:

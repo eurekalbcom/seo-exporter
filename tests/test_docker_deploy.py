@@ -11,7 +11,6 @@ import socket
 import stat
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -28,7 +27,7 @@ _IMAGE = "ghcr.io/eurekalbcom/seo-exporter@sha256:" + ("ab" * 32)
 _REPO = "ghcr.io/eurekalbcom/seo-exporter"
 _EXPORTER_SHA256 = {
     "pyproject.toml": "772940f0678f3f43d58f6577737111c87ce05a5c49baf22b595519ddfc6bfeab",
-    "requirements-dev.txt": "468b862d1a6f7bb772b5e1d4c8210331d435d0a293800befbc452d9081a94ef8",
+    "requirements-dev.txt": "ecbb9600a69b479de853d7e24a1c1246d6b646f44bdbee5421211dc427f18a32",
     "seo_exporter/__init__.py": "d7e2241973d3870ad6be6aeb5ad638a0cd182efa371aa0653abfda0d426640a4",
     "seo_exporter/__main__.py": "990b421ff805f37e7b633f81853fbb1ea0ef3d3f24cbca3a59d00c112e2892ae",
     "seo_exporter/bing.py": "4498f5a7089c76e293657400e4f2bee2e5de69e2bc5eec03d4da2de82587004b",
@@ -211,15 +210,18 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "prom/prometheus:v3.15.1@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae" in text
     assert "create_host_path" not in text
     assert "volumes:" not in text
+    assert not any(line.strip() == "configs:" for line in text.splitlines())
+    assert text.count("read_only: true") == 2
+    assert text.count("env_file:") == 1
+    assert 'exec /bin/prometheus --agent --config.file=/tmp/prometheus.yml --storage.agent.path=/prometheus --web.listen-address=127.0.0.1:9090' in text
+    assert "$$PROMETHEUS_CONFIG" in text
     assert _compose_config_content(text) == (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
-    flags = _agent_command(text)
-    assert "--agent" in flags
-    assert "--storage.agent.path=/prometheus" in flags
-    assert all("enable-feature" not in flag for flag in flags)
     agent = (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
+    scrape, remote = agent.split("remote_write:", 1)
+    assert "follow_redirects: false" in scrape
+    assert "follow_redirects: false" in remote
     assert "seo-exporter:9108" in agent
     assert "regex: seo_.*" in agent
-    assert "follow_redirects: false" in agent
     assert "sample_limit: 1000" in agent
     assert "http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write" in agent
     assert "100.122.36.23:" + "9" not in agent
@@ -290,6 +292,8 @@ def test_workflow_contract() -> None:
     assert "/srv/seo-exporter/deploy" in root_readme
     assert "CI_NODE_TAILNET_IP" not in root_readme
     assert "/srv/seo-exporter" in root_readme
+    assert "must be defined only in the `seo-readonly` environment" in root_readme
+    assert "SEO_REMOTE_WRITE_PORT` is defined only in this environment" in readme
     assert "9108" in root_readme
     assert "/opt/seo-exporter" not in root_readme
     assert "3000" not in root_readme
@@ -867,42 +871,21 @@ _PORT_TOKEN = "${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}"
 
 def _compose_config_content(text: str) -> str:
     lines = text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line.strip() == "content: |")
+    start = next(index for index, line in enumerate(lines) if line.strip() == "PROMETHEUS_CONFIG: |")
     body: list[str] = []
+    indent: int | None = None
     for line in lines[start + 1 :]:
         if line.strip() == "":
             body.append("")
             continue
-        if not line.startswith("      "):
+        if indent is None:
+            indent = len(line) - len(line.lstrip(" "))
+        if indent is None or not line.startswith(" " * indent):
             break
-        body.append(line[6:])
+        body.append(line[indent:])
     while body and body[-1] == "":
         body.pop()
     return "\n".join(body) + "\n"
-
-
-def _agent_command(text: str) -> list[str]:
-    lines = text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line == "  prometheus-agent:")
-    flags: list[str] = []
-    in_command = False
-    for line in lines[start + 1 :]:
-        if line and not line.startswith(" "):
-            break
-        if line.startswith("  ") and not line.startswith("    ") and line.strip():
-            break
-        if line.strip() == "command:":
-            in_command = True
-            continue
-        if not in_command:
-            continue
-        if line.startswith("      - "):
-            flags.append(line[len("      - ") :])
-            continue
-        if line.strip() == "":
-            continue
-        break
-    return flags
 
 
 def _pinned_agent_image(text: str) -> str:
@@ -938,12 +921,27 @@ def _render_agent_config(port: str) -> str:
     return rendered
 
 
-@pytest.mark.parametrize("key", ["network_mode", "cap_add", "pid", "ipc", "devices"])
-def test_forced_command_refuses_compose_denylist(tmp_path: Path, key: str) -> None:
-    compose = (
-        "name: seo-exporter\nservices:\n  seo-exporter:\n"
-        f"    image: example\n    {key}: host\n"
-    )
+def _forbidden_compose(key: str, shape: str) -> str:
+    if shape == "block":
+        service = f"    image: example\n    {key}: host\n"
+    elif shape == "quoted":
+        service = f'    image: example\n    "{key}": host\n'
+    elif shape == "single":
+        service = f"    image: example\n    '{key}': host\n"
+    elif shape == "flow":
+        service = "  seo-exporter: {image: example, " + key + ": host}\n"
+        return f"name: seo-exporter\nservices:\n{service}"
+    elif shape == "spaced":
+        service = f"    image: example\n    {key} : host\n"
+    else:
+        raise AssertionError(shape)
+    return f"name: seo-exporter\nservices:\n  seo-exporter:\n{service}"
+
+
+@pytest.mark.parametrize("key", ["network_mode", "cap_add", "pid", "ipc", "devices", "ports", "privileged"])
+@pytest.mark.parametrize("shape", ["block", "quoted", "single", "flow", "spaced"])
+def test_forced_command_refuses_compose_denylist(tmp_path: Path, key: str, shape: str) -> None:
+    compose = _forbidden_compose(key, shape)
     compose_sha = hashlib.sha256(compose.encode()).hexdigest()
     completed = _run_forced(tmp_path, _valid_wrapper_env(compose_sha), compose)
     assert completed.returncode == 1
@@ -952,11 +950,25 @@ def test_forced_command_refuses_compose_denylist(tmp_path: Path, key: str) -> No
 
 
 def test_forced_command_allows_pids_limit(tmp_path: Path) -> None:
-    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n    pids_limit: 128\n"
+    compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n    pids_limit : 128\n"
     compose_sha = hashlib.sha256(compose.encode()).hexdigest()
     completed = _run_forced(tmp_path, _valid_wrapper_env(compose_sha), compose)
     assert completed.returncode == 0, completed.stderr
     assert (tmp_path / "docker-ran").exists()
+
+
+def test_forced_command_refuses_socket_and_mixed_case(tmp_path: Path) -> None:
+    bodies = (
+        "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n    extra: /var/run/docker.sock\n",
+        "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n    extra: bezkolejki\n",
+        "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n    Network_Mode : host\n",
+    )
+    for compose in bodies:
+        compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+        completed = _run_forced(tmp_path, _valid_wrapper_env(compose_sha), compose)
+        assert completed.returncode == 1
+        assert "compose refused" in completed.stderr
+        assert not (tmp_path / "docker-ran").exists()
 
 
 def test_real_compose_passes_denylist(tmp_path: Path) -> None:
@@ -1019,76 +1031,16 @@ def test_promtool_checks_rendered_agent_config(tmp_path: Path) -> None:
     assert "SUCCESS" in checked.stdout
 
 
-def test_pinned_agent_becomes_ready(tmp_path: Path) -> None:
-    if not _docker_daemon():
-        pytest.skip("docker daemon unavailable")
-    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    flags = _agent_command(compose)
-    assert "--agent" in flags
-    assert "--storage.agent.path=/prometheus" in flags
-    assert all("enable-feature" not in flag for flag in flags)
-    rendered = tmp_path / "prometheus.yml"
-    rendered.write_text(_render_agent_config(_ephemeral_port()), encoding="utf-8")
-    rendered.chmod(0o444)
-    name = "seo-agent-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:12]
-    image = _pinned_agent_image(compose)
-    started = subprocess.run(
-        [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            name,
-            "--user",
-            "65534:65534",
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
-            "--tmpfs",
-            "/prometheus:uid=65534,gid=65534,mode=0750",
-            "--tmpfs",
-            "/tmp:uid=65534,gid=65534,mode=1770",
-            "-v",
-            f"{rendered}:/etc/prometheus/prometheus.yml:ro",
-            image,
-            *flags,
-        ],
+def test_compose_up_keeps_agent_ready() -> None:
+    completed = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "compose_up_smoke.sh")],
+        cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
     )
-    assert started.returncode == 0, started.stderr
-    try:
-        ready = ""
-        for _ in range(20):
-            probe = subprocess.run(
-                ["docker", "exec", name, "wget", "-qO-", "http://127.0.0.1:9090/-/ready"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if probe.returncode == 0:
-                ready = probe.stdout
-                break
-            time.sleep(0.5)
-        logs = subprocess.run(
-            ["docker", "logs", name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert "Ready" in ready, logs.stdout + logs.stderr
-        state = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Status}}", name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert state.stdout.strip() == "running"
-    finally:
-        subprocess.run(["docker", "rm", "-f", name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "prometheus-agent Up restarts=0 ready=Prometheus Agent is Ready." in completed.stdout
 
 
 def test_forced_command_rejects_remote_write_port(tmp_path: Path) -> None:

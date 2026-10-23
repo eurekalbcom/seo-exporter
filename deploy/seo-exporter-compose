@@ -137,8 +137,67 @@ compose_allowed() {
     printf '%s\n' "compose refused" >&2
     return 1
   fi
-  if grep -Eq '(^|[[:space:]])(ports|network_mode|cap_add|pid|ipc|devices|privileged):|docker\.sock|bezkolejki' "$file"; then
+  if ! command -v python3 >/dev/null 2>&1; then
     printf '%s\n' "compose refused" >&2
+    return 1
+  fi
+  if ! python3 - "$file" <<'PY'
+import sys
+
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("compose refused\n")
+    sys.exit(1)
+
+FORBIDDEN = {"network_mode", "cap_add", "pid", "ipc", "devices", "ports", "privileged"}
+BANNED = ("docker.sock", "bezkolejki")
+
+
+def refuse():
+    sys.stderr.write("compose refused\n")
+    sys.exit(1)
+
+
+def forbidden_key(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if str(key).lower() in FORBIDDEN or forbidden_key(value):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(forbidden_key(item) for item in node)
+    return False
+
+
+def banned_text(node):
+    if isinstance(node, dict):
+        return any(banned_text(key) or banned_text(value) for key, value in node.items())
+    if isinstance(node, list):
+        return any(banned_text(item) for item in node)
+    if isinstance(node, str):
+        return any(token in node for token in BANNED)
+    return False
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+except (OSError, UnicodeError, yaml.YAMLError):
+    refuse()
+
+if not isinstance(data, dict):
+    refuse()
+services = data.get("services")
+if not isinstance(services, dict) or not services:
+    refuse()
+for spec in services.values():
+    if not isinstance(spec, dict) or forbidden_key(spec):
+        refuse()
+if banned_text(data):
+    refuse()
+PY
+  then
     return 1
   fi
 }
