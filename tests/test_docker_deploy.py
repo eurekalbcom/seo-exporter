@@ -190,7 +190,7 @@ def test_entrypoint_drops_secrets_and_forces_bind(tmp_path: Path) -> None:
     loopback = dict(source)
     loopback["SEO_EXPORTER_BIND"] = "127.0.0.1"
     assert runtime_env(loopback)["SEO_EXPORTER_BIND"] == "0.0.0.0"
-    assert cleaned["SEO_EXPORTER_STATE_DIR"] == "/var/lib/seo-exporter"
+    assert cleaned["SEO_EXPORTER_STATE_DIR"] == "/var/lib/seo-exporter/state"
     assert cleaned["CREDENTIALS_DIRECTORY"] == "/run/credentials/seo-exporter"
     assert cleaned["SEO_EXPORTER_GSC_SITE"] == "sc-domain:example.com"
 
@@ -209,7 +209,12 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "pids_limit: 64" in text
     assert "prom/prometheus:v3.15.1@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae" in text
     assert "create_host_path: false" in text
-    assert "--enable-feature=agent" in (ROOT / "deploy" / "prometheus-agent-entrypoint.sh").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "deploy" / "prometheus-agent-entrypoint.sh").read_text(encoding="utf-8")
+    assert "--agent" in entrypoint.split()
+    assert "--enable-feature=agent" not in entrypoint
+    assert "seo-exporter-state:/var/lib/seo-exporter" in text
+    assert "SEO_EXPORTER_STATE_DIR: /var/lib/seo-exporter/state" in text
+    assert "/var/lib/seo-exporter:uid=10001" not in text
     agent = (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
     assert "seo-exporter:9108" in agent
     assert "regex: seo_.*" in agent
@@ -227,6 +232,8 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "/opt/seo-exporter" not in dockerfile
     assert "WORKDIR /srv/seo-exporter" in dockerfile
     assert "SEO_EXPORTER_BIND=0.0.0.0" in dockerfile
+    assert "SEO_EXPORTER_STATE_DIR=/var/lib/seo-exporter/state" in dockerfile
+    assert "chmod 0700 /var/lib/seo-exporter/state" in dockerfile
     assert "SEO_EXPORTER_PORT=9108" in dockerfile
     assert "image_digest" not in dockerfile
     assert "@sha256:9b98a8d37794ca093ba8d5afe1ffac52f5a15168b9b4e67594d86c20e14fa681" in dockerfile
@@ -873,7 +880,8 @@ def test_agent_entrypoint_renders_port(tmp_path: Path) -> None:
     assert "http://100.122.36.23:9/api/v1/write" in body
     assert "SEO_REMOTE_WRITE_PORT" not in body
     recorded = args.read_text(encoding="utf-8")
-    assert "--enable-feature=agent" in recorded
+    assert "--agent" in recorded.split()
+    assert "--enable-feature=agent" not in recorded
     assert "--web.listen-address=127.0.0.1:9090" in recorded
     for bad in ("", "0", "65536", "08", "abc"):
         env["SEO_REMOTE_WRITE_PORT"] = bad

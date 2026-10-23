@@ -103,7 +103,7 @@ def runtime_env(source: Mapping[str, str]) -> dict[str, str]:
     cleaned = {key: value for key, value in source.items() if key not in _DROP_KEYS}
     cleaned["CREDENTIALS_DIRECTORY"] = str(_CREDENTIALS)
     cleaned["SEO_EXPORTER_BIND"] = "0.0.0.0"
-    cleaned["SEO_EXPORTER_STATE_DIR"] = "/var/lib/seo-exporter"
+    cleaned["SEO_EXPORTER_STATE_DIR"] = "/var/lib/seo-exporter/state"
     cleaned["PYTHONDONTWRITEBYTECODE"] = "1"
     cleaned["PYTHONUNBUFFERED"] = "1"
     return cleaned

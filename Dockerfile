@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     CREDENTIALS_DIRECTORY=/run/credentials/seo-exporter \
-    SEO_EXPORTER_STATE_DIR=/var/lib/seo-exporter \
+    SEO_EXPORTER_STATE_DIR=/var/lib/seo-exporter/state \
     SEO_EXPORTER_BIND=0.0.0.0 \
     SEO_EXPORTER_PORT=9108 \
     HOME=/tmp \
@@ -15,8 +15,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN addgroup -g 10001 -S seo \
     && adduser -u 10001 -S -G seo -H -h /tmp -D seo \
-    && mkdir -p /run/credentials /var/lib/seo-exporter /tmp /srv/seo-exporter/deploy \
-    && chown 10001:10001 /run/credentials /var/lib/seo-exporter /tmp
+    && mkdir -p /run/credentials /var/lib/seo-exporter/state /tmp /srv/seo-exporter/deploy \
+    && chown 10001:10001 /run/credentials /var/lib/seo-exporter /var/lib/seo-exporter/state /tmp \
+    && chmod 0700 /var/lib/seo-exporter/state
 
 WORKDIR /srv/seo-exporter
 

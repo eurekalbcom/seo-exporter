@@ -26,7 +26,7 @@ if grep -q 'SEO_REMOTE_WRITE_PORT' "$rendered"; then
 fi
 
 exec "$prometheus" \
-  --enable-feature=agent \
+  --agent \
   --config.file="$rendered" \
   --storage.agent.path="$storage" \
   --web.listen-address=127.0.0.1:9090

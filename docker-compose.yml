@@ -22,12 +22,16 @@ services:
       CREDENTIALS_DIRECTORY: /run/credentials/seo-exporter
       SEO_EXPORTER_BIND: 0.0.0.0
       SEO_EXPORTER_PORT: "9108"
-      SEO_EXPORTER_STATE_DIR: /var/lib/seo-exporter
+      SEO_EXPORTER_STATE_DIR: /var/lib/seo-exporter/state
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
+    # Parent mount, not the state directory. A new volume root is owned by
+    # root; the image seeds state/ as uid 10001 mode 0700 and Docker copies
+    # that child in, so rotated refresh tokens survive restart.
+    volumes:
+      - seo-exporter-state:/var/lib/seo-exporter
     tmpfs:
       - /run/credentials:uid=10001,gid=10001,mode=0750
-      - /var/lib/seo-exporter:uid=10001,gid=10001,mode=0700
       - /tmp:uid=10001,gid=10001,mode=1770
     restart: unless-stopped
 
@@ -68,3 +72,6 @@ networks:
   seo-exporter_net:
     name: seo-exporter_net
     driver: bridge
+
+volumes:
+  seo-exporter-state:
