@@ -72,7 +72,7 @@ validate_env() {
   local -a lines=()
   local -A seen=()
   mapfile -t lines <"$file"
-  if [[ "${#lines[@]}" -ne 7 ]]; then
+  if [[ "${#lines[@]}" -ne 8 ]]; then
     printf '%s\n' "env rejected" >&2
     return 1
   fi
@@ -111,6 +111,12 @@ validate_env() {
           return 1
         fi
         ;;
+      SEO_REMOTE_WRITE_PASSWORD)
+        if [[ ! "$value" =~ ^[A-Za-z0-9]{16,128}$ ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
       SEO_EXPORTER_GSC_SITE | SEO_EXPORTER_BING_SITE | SEO_EXPORTER_GSC_JSON | SEO_EXPORTER_BING_JSON)
         if [[ ! "$value" =~ $quoted_re ]]; then
           printf '%s\n' "env rejected" >&2
@@ -123,7 +129,7 @@ validate_env() {
         ;;
     esac
   done
-  for key in SEO_EXPORTER_IMAGE SEO_EXPORTER_GSC_SITE SEO_EXPORTER_BING_SITE SEO_EXPORTER_GSC_JSON SEO_EXPORTER_BING_JSON SEO_REMOTE_WRITE_PORT SEO_COMPOSE_SHA256; do
+  for key in SEO_EXPORTER_IMAGE SEO_EXPORTER_GSC_SITE SEO_EXPORTER_BING_SITE SEO_EXPORTER_GSC_JSON SEO_EXPORTER_BING_JSON SEO_REMOTE_WRITE_PORT SEO_REMOTE_WRITE_PASSWORD SEO_COMPOSE_SHA256; do
     if [[ -z "${seen[$key]+x}" ]]; then
       printf '%s\n' "env rejected" >&2
       return 1

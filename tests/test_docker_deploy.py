@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import stat
@@ -14,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from deploy.docker_entrypoint import runtime_env, write_credentials
 from deploy.envfile import build_from_environ, normalize_image, render_env, write_env_file
@@ -69,6 +71,7 @@ def _base_env(tmp_path: Path | None = None) -> dict[str, str]:
         "GSC_SITE": "sc-domain:example.com",
         "BING_SITE": "https://example.invalid/",
         "SEO_REMOTE_WRITE_PORT": "9",
+        "SEO_REMOTE_WRITE_PASSWORD": secrets.token_hex(16),
         "COMPOSE_FILE": str(ROOT / "docker-compose.yml"),
     }
     if tmp_path is not None:
@@ -118,6 +121,7 @@ def test_envfile_mode_and_rejection(tmp_path: Path) -> None:
         "SEO_EXPORTER_GSC_JSON",
         "SEO_EXPORTER_BING_JSON",
         "SEO_REMOTE_WRITE_PORT",
+        "SEO_REMOTE_WRITE_PASSWORD",
         "SEO_COMPOSE_SHA256",
     ]
     path = tmp_path / "env"
@@ -136,6 +140,20 @@ def test_envfile_mode_and_rejection(tmp_path: Path) -> None:
     bad_port["SEO_REMOTE_WRITE_PORT"] = "65536"
     with pytest.raises(ValueError, match="SEO_REMOTE_WRITE_PORT rejected"):
         build_from_environ(bad_port)
+    missing_password = _base_env()
+    missing_password["SEO_REMOTE_WRITE_PASSWORD"] = " "
+    with pytest.raises(ValueError, match="SEO_REMOTE_WRITE_PASSWORD missing"):
+        build_from_environ(missing_password)
+    leaked = "not-a-password\nsecret"
+    bad_password = _base_env()
+    bad_password["SEO_REMOTE_WRITE_PASSWORD"] = leaked
+    with pytest.raises(ValueError, match="SEO_REMOTE_WRITE_PASSWORD rejected") as rejected:
+        build_from_environ(bad_password)
+    assert leaked not in str(rejected.value)
+    short_password = _base_env()
+    short_password["SEO_REMOTE_WRITE_PASSWORD"] = "a" * 15
+    with pytest.raises(ValueError, match="SEO_REMOTE_WRITE_PASSWORD rejected"):
+        build_from_environ(short_password)
 
 
 def test_envfile_cli_does_not_echo(tmp_path: Path) -> None:
@@ -193,6 +211,12 @@ def test_entrypoint_drops_secrets_and_forces_bind(tmp_path: Path) -> None:
     assert cleaned["SEO_EXPORTER_STATE_DIR"] == "/var/lib/seo-exporter"
     assert cleaned["CREDENTIALS_DIRECTORY"] == "/run/credentials/seo-exporter"
     assert cleaned["SEO_EXPORTER_GSC_SITE"] == "sc-domain:example.com"
+    remote_write_password = secrets.token_hex(16)
+    with_password = dict(source)
+    with_password["SEO_REMOTE_WRITE_PASSWORD"] = remote_write_password
+    dropped = runtime_env(with_password)
+    assert "SEO_REMOTE_WRITE_PASSWORD" not in dropped
+    assert remote_write_password not in dropped.values()
 
 
 def test_compose_file_matches_ciso_rules() -> None:
@@ -215,6 +239,12 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert text.count("env_file:") == 1
     assert 'exec /bin/prometheus --agent --config.file=/tmp/prometheus.yml --storage.agent.path=/prometheus --web.listen-address=127.0.0.1:9090' in text
     assert "$$PROMETHEUS_CONFIG" in text
+    assert "$$SEO_REMOTE_WRITE_PASSWORD" in text
+    assert "umask 077" in text
+    assert "chmod 400 /tmp/remote_write_password" in text
+    assert "unset SEO_REMOTE_WRITE_PASSWORD" in text
+    assert 'SEO_REMOTE_WRITE_PASSWORD: ""' in text
+    assert "SEO_REMOTE_WRITE_PASSWORD:?SEO_REMOTE_WRITE_PASSWORD is required" in text
     assert _compose_config_content(text) == (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
     agent = (ROOT / "deploy" / "prometheus-agent.yml").read_text(encoding="utf-8")
     scrape, remote = agent.split("remote_write:", 1)
@@ -223,6 +253,10 @@ def test_compose_file_matches_ciso_rules() -> None:
     assert "seo-exporter:9108" in agent
     assert "regex: seo_.*" in agent
     assert "sample_limit: 1000" in agent
+    assert "username: seo-exporter" in agent
+    assert "password_file: /tmp/remote_write_password" in agent
+    assert "password" + ":" not in agent
+    assert "password" + ":" not in text
     assert "http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write" in agent
     assert "100.122.36.23:" + "9" not in agent
     assert "expose:" not in text
@@ -263,6 +297,8 @@ def test_workflow_contract() -> None:
     assert "packages: read" in deploy_job
     assert "vars.SEO_REMOTE_WRITE_PORT" in deploy_job
     assert "SEO_REMOTE_WRITE_PORT:-" not in deploy
+    assert "secrets.SEO_REMOTE_WRITE_PASSWORD" in deploy_job
+    assert "SEO_REMOTE_WRITE_PASSWORD:-" not in deploy
     assert "bash deploy/verify_rollback.sh" in deploy_job
     assert deploy_job.index("bash deploy/verify_rollback.sh") < deploy_job.index("git checkout --detach")
     assert "environment: seo-readonly" in deploy_job
@@ -281,7 +317,14 @@ def test_workflow_contract() -> None:
     assert "CI_NODE_TAILNET_IP" not in readme
     assert "/srv/seo-exporter/deploy" in readme
     assert "0750" in readme
-    assert "no-pty,no-port-forwarding,no-agent-forwarding" in readme
+    assert 'restrict,from="100.64.0.0/10",command="/usr/local/sbin/seo-exporter-compose"' in readme
+    assert "no-pty" not in readme
+    assert "no-port-forwarding" not in readme
+    assert "no-agent-forwarding" not in readme
+    assert "Extra options make the host preflight warn." in readme
+    assert "refresh tokens" in readme
+    assert "named volume" in readme
+    assert "SEO_REMOTE_WRITE_PASSWORD" in readme
     assert "sha256sum docker-compose.yml" in readme
     assert "/opt/seo-exporter" not in readme
     assert "3000" not in readme
@@ -293,12 +336,18 @@ def test_workflow_contract() -> None:
     assert "CI_NODE_TAILNET_IP" not in root_readme
     assert "/srv/seo-exporter" in root_readme
     assert "must be defined only in the `seo-readonly` environment" in root_readme
+    assert 'restrict,from="100.64.0.0/10",command="/usr/local/sbin/seo-exporter-compose"' in root_readme
+    assert "no-pty" not in root_readme
+    assert "refresh tokens" in root_readme
+    assert "named volume" in root_readme
+    assert "SEO_REMOTE_WRITE_PASSWORD" in root_readme
     assert "SEO_REMOTE_WRITE_PORT` is defined only in this environment" in readme
     assert "9108" in root_readme
     assert "/opt/seo-exporter" not in root_readme
     assert "3000" not in root_readme
     ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert "SEO_REMOTE_WRITE_PORT" not in ci
+    assert "SEO_REMOTE_WRITE_PASSWORD" not in ci
     assert "prometheus-agent-entrypoint" not in ci
     assert "EUK_SSH_SEO_DEPLOY_V8QX" in readme
     assert "witold216" in readme
@@ -408,11 +457,13 @@ def _run_ssh(tmp_path: Path, updates: dict[str, str]) -> subprocess.CompletedPro
     marker = tmp_path / "ssh-invoked"
     argv_path = tmp_path / "ssh-argv"
     stdin_path = tmp_path / "ssh-stdin"
+    env_path = tmp_path / "ssh-env"
     ssh = bin_dir / "ssh"
     ssh.write_text(
         "#!/bin/sh\n"
         'touch "$SSH_MARKER"\n'
         'printf "%s\\n" "$*" >> "$SSH_ARGV"\n'
+        'env > "$SSH_ENV"\n'
         'printf "\\n--STDIN--\\n" >> "$SSH_STDIN"\n'
         'cat >> "$SSH_STDIN"\n'
         "exit 0\n",
@@ -425,6 +476,7 @@ def _run_ssh(tmp_path: Path, updates: dict[str, str]) -> subprocess.CompletedPro
     env["SSH_MARKER"] = str(marker)
     env["SSH_ARGV"] = str(argv_path)
     env["SSH_STDIN"] = str(stdin_path)
+    env["SSH_ENV"] = str(env_path)
     env.update(_base_env())
     env["SEO_TARGET_HOST"] = "target.internal"
     env["SEO_TARGET_HOSTKEY"] = "target.internal ssh-ed25519 AAAAC3TEST\n"
@@ -457,6 +509,13 @@ def test_ssh_deploy_reaches_host_only_with_secrets(tmp_path: Path) -> None:
     assert "bing-secret-marker" not in argv
     assert "deploy-key-material" not in argv
     assert "gsc-secret-marker" in stdin
+    match = re.search(r"(?m)^SEO_REMOTE_WRITE_PASSWORD=([A-Za-z0-9]+)$", stdin)
+    assert match is not None
+    assert match.group(1) not in argv
+    assert match.group(1) not in completed.stdout
+    assert match.group(1) not in completed.stderr
+    ssh_env = (tmp_path / "ssh-env").read_text(encoding="utf-8")
+    assert "SEO_REMOTE_WRITE_PASSWORD" not in ssh_env
     assert list((tmp_path / "runner").iterdir()) == []
 
 
@@ -497,6 +556,7 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
     compose = "name: seo-exporter\nservices:\n  seo-exporter:\n    image: example\n"
     (root / "docker-compose.yml").write_text(compose, encoding="utf-8")
     compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    remote_write_password = secrets.token_hex(16)
     env_text = "\n".join(
         (
             f"SEO_EXPORTER_IMAGE={_IMAGE}",
@@ -505,6 +565,7 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
             f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
             f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
             "SEO_REMOTE_WRITE_PORT=9",
+            f"SEO_REMOTE_WRITE_PASSWORD={remote_write_password}",
             f"SEO_COMPOSE_SHA256={compose_sha}",
             "",
         )
@@ -544,15 +605,19 @@ def test_forced_command_writes_env_and_refuses_other_commands(tmp_path: Path) ->
         )
         assert pulled.returncode == 0, pulled.stderr
         assert "gsc-secret-marker" not in pulled.stderr
+        assert remote_write_password not in pulled.stdout
+        assert remote_write_password not in pulled.stderr
         assert stat.S_IMODE((root / "data" / ".env").stat().st_mode) == 0o600
         assert "gsc-secret-marker" in (root / "data" / ".env").read_text(encoding="utf-8")
         docker_log = log.read_text(encoding="utf-8")
         assert "compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter pull" in docker_log
         assert "gsc-secret-marker" not in docker_log
+        assert remote_write_password not in docker_log
         dumped = env_dump.read_text(encoding="utf-8")
         assert "COMPOSE_FILE=" not in dumped
         assert "COMPOSE_PROJECT_NAME=" not in dumped
         assert "COMPOSE_PROFILES=" not in dumped
+        assert remote_write_password not in dumped
         assert "/tmp/evil-compose.yml" not in dumped
         up = subprocess.run(
             ["bash", str(wrapper)],
@@ -611,6 +676,7 @@ def test_forced_command_restores_env_when_pull_fails(tmp_path: Path) -> None:
             f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
             f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
             "SEO_REMOTE_WRITE_PORT=9",
+            f"SEO_REMOTE_WRITE_PASSWORD={secrets.token_hex(16)}",
             f"SEO_COMPOSE_SHA256={compose_sha}",
             "",
         )
@@ -645,7 +711,9 @@ def test_forced_command_restores_env_when_pull_fails(tmp_path: Path) -> None:
         listener.close()
 
 
-def _valid_wrapper_env(compose_sha: str) -> str:
+def _valid_wrapper_env(compose_sha: str, receiver_secret: str | None = None) -> str:
+    if receiver_secret is None:
+        receiver_secret = secrets.token_hex(16)
     return "\n".join(
         (
             f"SEO_EXPORTER_IMAGE={_IMAGE}",
@@ -654,6 +722,7 @@ def _valid_wrapper_env(compose_sha: str) -> str:
             f"SEO_EXPORTER_GSC_JSON='{_credential('gsc-secret-marker')}'",
             f"SEO_EXPORTER_BING_JSON='{_credential('bing-secret-marker')}'",
             "SEO_REMOTE_WRITE_PORT=9",
+            f"SEO_REMOTE_WRITE_PASSWORD={receiver_secret}",
             f"SEO_COMPOSE_SHA256={compose_sha}",
         )
     ) + "\n"
@@ -1053,9 +1122,33 @@ def test_forced_command_rejects_remote_write_port(tmp_path: Path) -> None:
         assert completed.returncode == 1
         assert "env rejected" in completed.stderr
         assert not (tmp_path / "docker-ran").exists()
+    malformed = (
+        "a" * 15,
+        "a" * 129,
+        "has space" + ("a" * 16),
+        "dollar$" + ("b" * 16),
+        "quote'" + ("c" * 16),
+        "line\nbreak" + ("d" * 16),
+        "",
+    )
+    for value in malformed:
+        body = _replace_env_line(valid, "SEO_REMOTE_WRITE_PASSWORD=", f"SEO_REMOTE_WRITE_PASSWORD={value}")
+        completed = _run_forced(tmp_path, body)
+        assert completed.returncode == 1
+        assert "env rejected" in completed.stderr
+        if value:
+            assert value not in completed.stdout
+            assert value not in completed.stderr
+        assert not (tmp_path / "docker-ran").exists()
+    missing_password = "\n".join(
+        line for line in valid.splitlines() if not line.startswith("SEO_REMOTE_WRITE_PASSWORD=")
+    ) + "\n"
+    missing = _run_forced(tmp_path, missing_password)
+    assert missing.returncode == 1
+    assert "env rejected" in missing.stderr
     pad = "p" * 40000
     with pytest.raises(ValueError, match="env file rejected"):
-        render_env(_IMAGE, pad, pad, pad, pad, "9", "ab" * 32)
+        render_env(_IMAGE, pad, pad, pad, pad, "9", secrets.token_hex(16), "ab" * 32)
 
 
 def test_entrypoint_rejects_write_mode_and_auth_trust_host() -> None:
@@ -1107,6 +1200,30 @@ def test_rendered_env_quotes_sites_and_json_for_compose(tmp_path: Path) -> None:
     assert rendered.returncode == 0, rendered.stderr
     assert "pwned-marker" not in rendered.stdout
     assert "$${UNTRUSTED}" in rendered.stdout
+    secret = next(
+        line.split("=", 1)[1]
+        for line in text.splitlines()
+        if line.startswith("SEO_REMOTE_WRITE_PASSWORD=")
+    )
+    parsed = yaml.safe_load(rendered.stdout)
+    exporter_env = parsed["services"]["seo-exporter"]["environment"]
+    agent = parsed["services"]["prometheus-agent"]
+    agent_env = dict(agent["environment"])
+    command = agent["command"]
+    command_text = command if isinstance(command, str) else "\n".join(command)
+    assert exporter_env.get("SEO_REMOTE_WRITE_PASSWORD", "") == ""
+    assert secret not in exporter_env.values()
+    assert secret not in command_text
+    assert secret not in agent_env["PROMETHEUS_CONFIG"]
+    assert agent_env.pop("SEO_REMOTE_WRITE_PASSWORD") == secret
+    remainder = json.dumps(
+        {
+            "seo-exporter": parsed["services"]["seo-exporter"],
+            "prometheus-agent": {**agent, "environment": agent_env},
+        }
+    )
+    assert secret not in remainder
+    assert "password_file: /tmp/remote_write_password" in agent_env["PROMETHEUS_CONFIG"]
     quoted = source.copy()
     quoted["BING_SITE"] = "https://example.com/a'b"
     with pytest.raises(ValueError, match="BING_SITE rejected"):

@@ -53,15 +53,17 @@ Use this when a credential leaks or is suspected to have leaked:
 
 ## Docker deploy
 
-The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push). The publish job pushes the image (`packages: write`, no EUK secrets). The deploy job is the `seo-readonly` environment (reviewer Jan, branch `main`) and does not have `packages: write`. Host install via systemd or a root sudoers installer is rejected. The container rejects `WRITE_MODE` and `AUTH_TRUST_HOST` if they are set. This service has no write API and does not trust `X-Forwarded-Host`. Inside the container the metrics server binds `0.0.0.0` on port `9108`. The host directory `/srv/seo-exporter` is owned by root, group `seo-deploy`, mode `0750`. `/srv/seo-exporter/deploy` is not mounted. If that directory is present it has the same owner, group, and mode. The host does not publish that port. A Prometheus agent on the same compose network remote-writes `seo_*` series to `100.122.36.23`. `SEO_REMOTE_WRITE_PORT` must be defined only in the `seo-readonly` environment. It has no default. See [deploy/README.md](deploy/README.md) for the forced command, the host layout, and rollback by previous image digest.
+The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push). The publish job pushes the image (`packages: write`, no EUK secrets). The deploy job is the `seo-readonly` environment (reviewer Jan, branch `main`) and does not have `packages: write`. Host install via systemd or a root sudoers installer is rejected. The container rejects `WRITE_MODE` and `AUTH_TRUST_HOST` if they are set. This service has no write API and does not trust `X-Forwarded-Host`. Inside the container the metrics server binds `0.0.0.0` on port `9108`. The host directory `/srv/seo-exporter` is owned by root, group `seo-deploy`, mode `0750`. `/srv/seo-exporter/deploy` is not mounted. If that directory is present it has the same owner, group, and mode. The host does not publish that port. A Prometheus agent on the same compose network remote-writes `seo_*` series to `100.122.36.23` with basic auth. `SEO_REMOTE_WRITE_PORT` and `SEO_REMOTE_WRITE_PASSWORD` must be defined only in the `seo-readonly` environment. Neither has a default. The receiver user is the fixed name `seo-exporter` in the agent config. `/var/lib/seo-exporter` in the exporter is tmpfs and holds the refresh tokens. The tokens never touch disk. If the provider rotated a token, a container restart loses it and you must redeploy with the new secret. A named volume is rejected by CISO because it would keep tokens on disk in the account HOME. See [deploy/README.md](deploy/README.md) for the forced command, the host layout, and rollback by previous image digest.
 
 The compose digest is the raw SHA-256 of `docker-compose.yml`. Compute it with `sha256sum docker-compose.yml` and take the first field. That 64-character hex value is `SEO_COMPOSE_SHA256`.
 
 Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). The CI node is ephemeral, so `from=` uses the tailnet CGNAT range `100.64.0.0/10` instead of one address. Do not put a real key in the repo.
 
 ```
-from="100.64.0.0/10",restrict,command="/usr/local/sbin/seo-exporter-compose",no-pty,no-port-forwarding,no-agent-forwarding ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
+restrict,from="100.64.0.0/10",command="/usr/local/sbin/seo-exporter-compose" ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
 ```
+
+`restrict` already covers a TTY, port forwarding, agent forwarding, and X11, so the line does not repeat those options. Extra options make the host preflight warn.
 
 ## SEO Autopilot (EUR-407)
 

@@ -33,16 +33,50 @@ fi
 
 docker compose --project-directory "$root" --env-file "$env_file" config --no-interpolate >/dev/null
 
+password=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+
+require_missing() {
+  local name=$1
+  if [[ ! -s "$stderr" ]]; then
+    printf '%s\n' "${name} was not required" >&2
+    exit 1
+  fi
+  local err
+  err=$(cat "$stderr")
+  case "$err" in
+    *"$password"*)
+      printf '%s\n' "password leaked" >&2
+      exit 1
+      ;;
+    *"$name"*) ;;
+    *)
+      printf '%s\n' "${name} was not required" >&2
+      exit 1
+      ;;
+  esac
+}
+
+export SEO_REMOTE_WRITE_PASSWORD="$password"
+unset SEO_REMOTE_WRITE_PORT
 set +e
-env -u SEO_REMOTE_WRITE_PORT docker compose --project-directory "$root" --env-file "$env_file" config >/dev/null 2>"$stderr"
+docker compose --project-directory "$root" --env-file "$env_file" config >/dev/null 2>"$stderr"
 status=$?
 set -e
 if [[ "$status" -eq 0 ]]; then
   printf '%s\n' "SEO_REMOTE_WRITE_PORT default refused" >&2
   exit 1
 fi
-if ! grep -q 'SEO_REMOTE_WRITE_PORT' "$stderr"; then
-  cat "$stderr" >&2
-  printf '%s\n' "SEO_REMOTE_WRITE_PORT was not required" >&2
+require_missing SEO_REMOTE_WRITE_PORT
+
+unset SEO_REMOTE_WRITE_PASSWORD
+export SEO_REMOTE_WRITE_PORT="$port"
+set +e
+docker compose --project-directory "$root" --env-file "$env_file" config >/dev/null 2>"$stderr"
+status=$?
+set -e
+if [[ "$status" -eq 0 ]]; then
+  printf '%s\n' "SEO_REMOTE_WRITE_PASSWORD default refused" >&2
   exit 1
 fi
+require_missing SEO_REMOTE_WRITE_PASSWORD

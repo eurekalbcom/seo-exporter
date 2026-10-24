@@ -72,6 +72,7 @@ remote() {
   local command=$1
   local stdin_file=$2
   env -u GSC_JSON -u BING_JSON -u SSH_KEY -u GSC_SITE -u BING_SITE \
+    -u SEO_REMOTE_WRITE_PASSWORD \
     -- ssh \
     -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile="$known" \

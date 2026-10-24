@@ -17,6 +17,7 @@ from deploy.credentials_json import canonicalize_credential
 ALLOWED_REPO = "ghcr.io/eurekalbcom/seo-exporter"
 _IMAGE = re.compile(rf"^{re.escape(ALLOWED_REPO)}@sha256:[0-9a-f]{{64}}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PASSWORD = re.compile(r"^[A-Za-z0-9]{16,128}$")
 _MAX_ENV_BYTES = 65536
 
 
@@ -127,6 +128,25 @@ def require_port(raw: str | None) -> str:
     return value
 
 
+def require_password(raw: str | None) -> str:
+    """Return the remote-write password with no default.
+
+    Args:
+        raw: ``SEO_REMOTE_WRITE_PASSWORD`` from the environment.
+
+    Returns:
+        16 to 128 letters or digits, unchanged.
+
+    Raises:
+        ValueError: The value is missing or not in that set.
+    """
+    if raw is None or not raw.strip():
+        raise ValueError("SEO_REMOTE_WRITE_PASSWORD missing")
+    if _PASSWORD.fullmatch(raw) is None:
+        raise ValueError("SEO_REMOTE_WRITE_PASSWORD rejected")
+    return raw
+
+
 def compose_sha256(path: Path) -> str:
     """Hash the compose file that must be installed on the host.
 
@@ -151,6 +171,7 @@ def render_env(
     gsc_json: str,
     bing_json: str,
     remote_write_port: str,
+    receiver_secret: str,
     compose_sha: str,
 ) -> str:
     """Render the env file body.
@@ -162,6 +183,7 @@ def render_env(
         gsc_json: Canonical Google credential JSON.
         bing_json: Canonical Bing credential JSON.
         remote_write_port: Receiver port.
+        receiver_secret: Remote-write basic auth secret.
         compose_sha: SHA-256 of ``docker-compose.yml``.
 
     Returns:
@@ -175,6 +197,7 @@ def render_env(
     if not _SHA256.fullmatch(compose_sha):
         raise ValueError("compose hash rejected")
     port = require_port(remote_write_port)
+    password = require_password(receiver_secret)
     lines = (
         f"SEO_EXPORTER_IMAGE={image}",
         f"SEO_EXPORTER_GSC_SITE={quote_single(gsc_site)}",
@@ -182,6 +205,7 @@ def render_env(
         f"SEO_EXPORTER_GSC_JSON={quote_single(gsc_json)}",
         f"SEO_EXPORTER_BING_JSON={quote_single(bing_json)}",
         f"SEO_REMOTE_WRITE_PORT={port}",
+        f"SEO_REMOTE_WRITE_PASSWORD={password}",
         f"SEO_COMPOSE_SHA256={compose_sha}",
     )
     text = "\n".join(lines) + "\n"
@@ -251,6 +275,7 @@ def build_from_environ(environ: Mapping[str, str] | None = None) -> str:
     gsc_site = require_site("GSC_SITE", env.get("GSC_SITE"))
     bing_site = require_site("BING_SITE", env.get("BING_SITE"))
     remote_write_port = require_port(env.get("SEO_REMOTE_WRITE_PORT"))
+    remote_write_password = require_password(env.get("SEO_REMOTE_WRITE_PASSWORD"))
     compose = compose_sha256(Path(env.get("COMPOSE_FILE", "docker-compose.yml")))
     return render_env(
         image,
@@ -259,6 +284,7 @@ def build_from_environ(environ: Mapping[str, str] | None = None) -> str:
         gsc_json,
         bing_json,
         remote_write_port,
+        remote_write_password,
         compose,
     )
 
