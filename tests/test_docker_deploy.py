@@ -297,8 +297,11 @@ def test_workflow_contract() -> None:
     assert "packages: read" in deploy_job
     assert "vars.SEO_REMOTE_WRITE_PORT" in deploy_job
     assert "SEO_REMOTE_WRITE_PORT:-" not in deploy
-    assert "secrets.SEO_REMOTE_WRITE_PASSWORD" in deploy_job
+    assert "secrets.EUK_PASS_SEO_REMOTE_WRITE_W216" in deploy_job
+    assert "SEO_REMOTE_WRITE_PASSWORD: ${{ secrets.EUK_PASS_SEO_REMOTE_WRITE_W216 }}" in deploy_job
+    assert "secrets." + "SEO_REMOTE_WRITE_PASSWORD" not in deploy
     assert "SEO_REMOTE_WRITE_PASSWORD:-" not in deploy
+    assert "EUK_PASS_SEO_REMOTE_WRITE_W216:-" not in deploy
     assert "bash deploy/verify_rollback.sh" in deploy_job
     assert deploy_job.index("bash deploy/verify_rollback.sh") < deploy_job.index("git checkout --detach")
     assert "environment: seo-readonly" in deploy_job
@@ -325,6 +328,8 @@ def test_workflow_contract() -> None:
     assert "refresh tokens" in readme
     assert "named volume" in readme
     assert "SEO_REMOTE_WRITE_PASSWORD" in readme
+    assert "EUK_PASS_SEO_REMOTE_WRITE_W216" in readme
+    assert "secrets." + "SEO_REMOTE_WRITE_PASSWORD" not in readme
     assert "sha256sum docker-compose.yml" in readme
     assert "/opt/seo-exporter" not in readme
     assert "3000" not in readme
@@ -341,6 +346,8 @@ def test_workflow_contract() -> None:
     assert "refresh tokens" in root_readme
     assert "named volume" in root_readme
     assert "SEO_REMOTE_WRITE_PASSWORD" in root_readme
+    assert "EUK_PASS_SEO_REMOTE_WRITE_W216" in root_readme
+    assert "secrets." + "SEO_REMOTE_WRITE_PASSWORD" not in root_readme
     assert "SEO_REMOTE_WRITE_PORT` is defined only in this environment" in readme
     assert "9108" in root_readme
     assert "/opt/seo-exporter" not in root_readme
@@ -348,6 +355,7 @@ def test_workflow_contract() -> None:
     ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert "SEO_REMOTE_WRITE_PORT" not in ci
     assert "SEO_REMOTE_WRITE_PASSWORD" not in ci
+    assert "EUK_PASS_SEO_REMOTE_WRITE_W216" not in ci
     assert "prometheus-agent-entrypoint" not in ci
     assert "EUK_SSH_SEO_DEPLOY_V8QX" in readme
     assert "witold216" in readme
