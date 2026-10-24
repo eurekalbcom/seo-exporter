@@ -18,13 +18,18 @@ Runs as a service on the target host. GitHub Actions deploys it through the prot
 | `EUK_OAUTH_GSC_READONLY` | JSON (one object per provider: client + refresh credentials) | Google Search Console, read-only scope |
 | `EUK_OAUTH_BING_READONLY` | JSON (one object per provider) | Bing Webmaster API, read-only |
 | `EUK_OAUTH_TAILSCALE_SEO_DEPLOY` | Tailscale OAuth client (auth_keys, `tag:gh-seo-deploy` only) | Ephemeral tailnet join for deploy |
-| `EUK_SSH_SEO_DEPLOY_V8QX` | SSH private key (forced command on target) | Deploy to target host as `seo-deploy` |
+| `EUK_SSH_SEO_DEPLOY_V8QX` | SSH private key (forced command on target) | Retired. Revoke after the witold216 Docker deploy merges. |
+| `EUK_SSH_SEO_DEPLOY_W216` | SSH private key (forced command on target) | Deploy to witold216 as `seo-deploy`, without sudo |
 
 ### Environment variables
 
 | Name | Purpose |
 |---|---|
-| `EUK_VAR_SEO_TARGET_HOST` | Target host for the deploy |
+| `EUK_VAR_SEO_TARGET_HOST` | Target host for the deploy. Docker deploy uses witold216 (develop). The value is not committed. |
+| `EUK_VAR_SEO_TARGET_HOSTKEY` | One OpenSSH known_hosts line for that host |
+| `EUK_VAR_SEO_GSC_SITE` | Search Console property for the Docker deploy |
+| `EUK_VAR_SEO_BING_SITE` | Bing site for the Docker deploy |
+| `SEO_DEPLOY_ENABLED` | Repository variable. Fail-closed HOLD switch. Publish and deploy run only when this is `true`. |
 
 There are no separate `*_CLIENT_ID` variables. The client IDs are inside the provider JSON secrets.
 
@@ -42,9 +47,23 @@ Use this when a credential leaks or is suspected to have leaked:
 1. **GSC**: revoke the OAuth grant or refresh token in Google Cloud / Google Account for the exporter client, then delete `EUK_OAUTH_GSC_READONLY` from the environment.
 2. **Bing**: revoke or regenerate the API credential in Bing Webmaster Tools, then delete `EUK_OAUTH_BING_READONLY`.
 3. **Tailscale**: delete the OAuth client in the Tailscale admin console, remove any `tag:gh-seo-deploy` devices, then delete `EUK_OAUTH_TAILSCALE_SEO_DEPLOY`.
-4. **SSH**: remove the deploy key from `~seo-deploy/.ssh/authorized_keys` on the target host, then delete `EUK_SSH_SEO_DEPLOY_V8QX`.
+4. **SSH**: remove the deploy key from `~seo-deploy/.ssh/authorized_keys` on the target host, then delete `EUK_SSH_SEO_DEPLOY_W216`. `EUK_SSH_SEO_DEPLOY_V8QX` is revoked after the Docker deploy merges: remove its authorized_keys line and delete that secret too.
 5. Cancel any running workflows. If needed, disable Actions for the repository.
 6. Record the incident in the security log and the expire/rotate catalog, then rotate following the canonical procedure.
+
+## Docker deploy
+
+The read-only exporter runs as a container on witold216. The workflow is `workflow_dispatch` only (no deploy on push). The publish job pushes the image (`packages: write`, no EUK secrets). The deploy job is the `seo-readonly` environment (reviewer Jan, branch `main`) and does not have `packages: write`. Host install via systemd or a root sudoers installer is rejected. The container rejects `WRITE_MODE` and `AUTH_TRUST_HOST` if they are set. This service has no write API and does not trust `X-Forwarded-Host`. Inside the container the metrics server binds `0.0.0.0` on port `9108`. The host directory `/srv/seo-exporter` is owned by root, group `seo-deploy`, mode `0750`. `/srv/seo-exporter/deploy` is not mounted. If that directory is present it has the same owner, group, and mode. The host does not publish that port. A Prometheus agent on the same compose network remote-writes `seo_*` series to `100.122.36.23` with basic auth. `SEO_REMOTE_WRITE_PORT` must be defined only in the `seo-readonly` environment. The receiver password is the `seo-readonly` secret `EUK_PASS_SEO_REMOTE_WRITE_W216`, mapped onto the env file key `SEO_REMOTE_WRITE_PASSWORD`. Neither has a default. The receiver user is the fixed name `seo-exporter` in the agent config. `/var/lib/seo-exporter` in the exporter is tmpfs and holds the refresh tokens. The tokens never touch disk. If the provider rotated a token, a container restart loses it and you must redeploy with the new secret. A named volume is rejected by CISO because it would keep tokens on disk in the account HOME. See [deploy/README.md](deploy/README.md) for the forced command, the host layout, and rollback by previous image digest.
+
+The compose digest is the raw SHA-256 of `docker-compose.yml`. Compute it with `sha256sum docker-compose.yml` and take the first field. That 64-character hex value is `SEO_COMPOSE_SHA256`.
+
+Install this single line as `~seo-deploy/.ssh/authorized_keys` (mode `0600`). The CI node is ephemeral, so `from=` uses the tailnet CGNAT range `100.64.0.0/10` instead of one address. Do not put a real key in the repo.
+
+```
+restrict,from="100.64.0.0/10",command="/usr/local/sbin/seo-exporter-compose" ssh-ed25519 REPLACE_WITH_W216_DEPLOY_PUBLIC_KEY seo-deploy-w216
+```
+
+`restrict` already covers a TTY, port forwarding, agent forwarding, and X11, so the line does not repeat those options. Extra options make the host preflight warn.
 
 ## SEO Autopilot (EUR-407)
 
@@ -66,6 +85,8 @@ This repository is the home for the read-only SEO Autopilot MVP. CrawlSEO is ven
 | `ORCHESTRATOR_TOKEN` | unset | `/api/internal/jobs` stays 404 |
 | `METRICS_TOKEN` | unset | `GET /metrics` stays 401 |
 | `AUTH_TRUST_HOST` | unset | Trust `X-Forwarded-Host` only when exactly `true` |
+
+Those two flags belong to CrawlSEO. The Docker exporter rejects `WRITE_MODE` and `AUTH_TRUST_HOST` instead of honoring them.
 
 Secrets stay in the environment. Do not commit `.env` files or keys.
 
@@ -123,4 +144,4 @@ npm ci
 npm test
 ```
 
-MCP is stdio only: `npm run mcp` inside `crawlseo/`. Postgres is on the compose internal network and has no published port. The app port is `127.0.0.1:3000`.
+MCP is stdio only: `npm run mcp` inside `crawlseo/`. Postgres is on the compose internal network and has no published port.

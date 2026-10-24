@@ -1,0 +1,313 @@
+#!/bin/bash
+# Forced command for the non-root seo-deploy user on witold216.
+# Installed at /usr/local/sbin/seo-exporter-compose. No sudo.
+# SSH_ORIGINAL_COMMAND may only be:
+#   docker compose pull
+#   docker compose up -d
+#   docker compose ps
+# The wrapper adds the compose file and project. The client strings stay exact.
+set -euo pipefail
+umask 077
+unset CDPATH
+unset SEO_COMPOSE_ROOT
+unset SEO_DOCKER_SOCKET
+unset DOCKER_HOST
+unset DOCKER_CONTEXT
+
+# Drop every exported COMPOSE_* variable. COMPOSE_FILE, COMPOSE_PROJECT_NAME,
+# and COMPOSE_PROFILES would otherwise select a different file than the one
+# whose hash was checked.
+drop_compose_env() {
+  local name
+  while IFS= read -r name; do
+    if [[ -n "$name" ]]; then
+      unset "$name"
+    fi
+  done < <(compgen -e COMPOSE_ || true)
+}
+drop_compose_env
+
+ROOT=/srv/seo-exporter
+DATA="${ROOT}/data"
+cd -- "$ROOT"
+
+uid=$(id -u)
+if [[ "$uid" -eq 0 ]]; then
+  printf '%s\n' "refusing root" >&2
+  exit 1
+fi
+
+sock="/run/user/${uid}/docker.sock"
+if [[ ! -S "$sock" ]]; then
+  printf '%s\n' "rootless docker socket missing" >&2
+  exit 1
+fi
+resolved=$(readlink -f "$sock")
+case "$resolved" in
+  /var/run/docker.sock | /run/docker.sock)
+    printf '%s\n' "system docker socket refused" >&2
+    exit 1
+    ;;
+esac
+export DOCKER_HOST="unix://${sock}"
+export PATH="/usr/local/bin:/usr/bin:/bin"
+
+cmd=${SSH_ORIGINAL_COMMAND-}
+case "$cmd" in
+  "docker compose pull" | "docker compose up -d" | "docker compose ps") ;;
+  *)
+    printf '%s\n' "command refused" >&2
+    exit 1
+    ;;
+esac
+
+# The image is this repository's GHCR name pinned by digest.
+image_re='^ghcr\.io/eurekalbcom/seo-exporter@sha256:[0-9a-f]{64}$'
+# Single quotes, with no quote inside, so Compose does not interpolate ${}.
+quoted_re="^'[^']+'$"
+
+validate_env() {
+  local file=$1
+  local line key value
+  local -a lines=()
+  local -A seen=()
+  mapfile -t lines <"$file"
+  if [[ "${#lines[@]}" -ne 8 ]]; then
+    printf '%s\n' "env rejected" >&2
+    return 1
+  fi
+  for line in "${lines[@]}"; do
+    if [[ -z "$line" || "$line" == \#* || "$line" == *$'\r'* || "$line" =~ ^[[:space:]] ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+    if [[ ! "$line" =~ ^[A-Z0-9_]+=.+ ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+    key=${line%%=*}
+    value=${line#*=}
+    if [[ -n "${seen[$key]+x}" ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+    seen[$key]=1
+    case "$key" in
+      SEO_EXPORTER_IMAGE)
+        if [[ ! "$value" =~ $image_re ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      SEO_COMPOSE_SHA256)
+        if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      SEO_REMOTE_WRITE_PORT)
+        if [[ ! "$value" =~ ^[1-9][0-9]{0,4}$ ]] || (( 10#$value < 1 || 10#$value > 65535 )); then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      SEO_REMOTE_WRITE_PASSWORD)
+        if [[ ! "$value" =~ ^[A-Za-z0-9]{16,128}$ ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      SEO_EXPORTER_GSC_SITE | SEO_EXPORTER_BING_SITE | SEO_EXPORTER_GSC_JSON | SEO_EXPORTER_BING_JSON)
+        if [[ ! "$value" =~ $quoted_re ]]; then
+          printf '%s\n' "env rejected" >&2
+          return 1
+        fi
+        ;;
+      *)
+        printf '%s\n' "env rejected" >&2
+        return 1
+        ;;
+    esac
+  done
+  for key in SEO_EXPORTER_IMAGE SEO_EXPORTER_GSC_SITE SEO_EXPORTER_BING_SITE SEO_EXPORTER_GSC_JSON SEO_EXPORTER_BING_JSON SEO_REMOTE_WRITE_PORT SEO_REMOTE_WRITE_PASSWORD SEO_COMPOSE_SHA256; do
+    if [[ -z "${seen[$key]+x}" ]]; then
+      printf '%s\n' "env rejected" >&2
+      return 1
+    fi
+  done
+}
+
+compose_allowed() {
+  local file=${ROOT}/docker-compose.yml
+  if [[ ! -f "$file" ]]; then
+    printf '%s\n' "compose refused" >&2
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "compose refused" >&2
+    return 1
+  fi
+  if ! python3 - "$file" <<'PY'
+import sys
+
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("compose refused\n")
+    sys.exit(1)
+
+FORBIDDEN = {"network_mode", "cap_add", "pid", "ipc", "devices", "ports", "privileged"}
+BANNED = ("docker.sock", "bezkolejki")
+
+
+def refuse():
+    sys.stderr.write("compose refused\n")
+    sys.exit(1)
+
+
+def forbidden_key(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if str(key).lower() in FORBIDDEN or forbidden_key(value):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(forbidden_key(item) for item in node)
+    return False
+
+
+def banned_text(node):
+    if isinstance(node, dict):
+        return any(banned_text(key) or banned_text(value) for key, value in node.items())
+    if isinstance(node, list):
+        return any(banned_text(item) for item in node)
+    if isinstance(node, str):
+        return any(token in node for token in BANNED)
+    return False
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+except (OSError, UnicodeError, yaml.YAMLError):
+    refuse()
+
+if not isinstance(data, dict):
+    refuse()
+services = data.get("services")
+if not isinstance(services, dict) or not services:
+    refuse()
+for spec in services.values():
+    if not isinstance(spec, dict) or forbidden_key(spec):
+        refuse()
+if banned_text(data):
+    refuse()
+PY
+  then
+    return 1
+  fi
+}
+
+compose_hash_ok() {
+  local file=$1
+  local expected actual
+  expected=$(awk -F= '/^SEO_COMPOSE_SHA256=/ {print substr($0, index($0, "=") + 1)}' "$file")
+  actual=$(sha256sum "${ROOT}/docker-compose.yml" | awk '{print $1}')
+  if [[ "$expected" != "$actual" ]]; then
+    printf '%s\n' "compose hash refused" >&2
+    return 1
+  fi
+}
+
+restore_env() {
+  rm -f -- "${DATA}/.env"
+  if [[ -f "${DATA}/.env.prev" ]]; then
+    mv -f -- "${DATA}/.env.prev" "${DATA}/.env"
+    chmod 600 "${DATA}/.env"
+  fi
+}
+
+install_env() {
+  local tmp=$1
+  if ! validate_env "$tmp"; then
+    rm -f -- "$tmp"
+    exit 1
+  fi
+  if ! compose_allowed || ! compose_hash_ok "$tmp"; then
+    rm -f -- "$tmp"
+    exit 1
+  fi
+  if [[ -f "${DATA}/.env" ]]; then
+    mv -f -- "${DATA}/.env" "${DATA}/.env.prev"
+  fi
+  chmod 600 "$tmp"
+  mv -f -- "$tmp" "${DATA}/.env"
+  chmod 600 "${DATA}/.env"
+  drop_compose_env
+  if ! docker compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter pull; then
+    restore_env
+    exit 1
+  fi
+  rm -f -- "${DATA}/.env.prev"
+}
+
+if [[ ! -d "$DATA" || ! -w "$DATA" ]]; then
+  printf '%s\n' "data directory rejected" >&2
+  exit 1
+fi
+tmp=$(mktemp "${DATA}/.env.XXXXXX")
+# 64 KiB. One extra byte is refused and never passed to docker.
+if ! dd if=/dev/stdin of="$tmp" bs=65537 count=1 status=none iflag=fullblock; then
+  rm -f -- "$tmp"
+  printf '%s\n' "env rejected" >&2
+  exit 1
+fi
+stdin_bytes=$(wc -c <"$tmp" | tr -d '[:space:]')
+if [[ "$stdin_bytes" -gt 65536 ]]; then
+  rm -f -- "$tmp"
+  printf '%s\n' "env rejected" >&2
+  exit 1
+fi
+if [[ "$cmd" != "docker compose pull" ]]; then
+  if [[ -s "$tmp" ]]; then
+    rm -f -- "$tmp"
+    printf '%s\n' "command refused" >&2
+    exit 1
+  fi
+  rm -f -- "$tmp"
+  if [[ ! -f "${DATA}/.env" ]]; then
+    printf '%s\n' "env file missing" >&2
+    exit 1
+  fi
+  mode=$(stat -c '%a' "${DATA}/.env")
+  if [[ "$mode" != "600" ]]; then
+    printf '%s\n' "env file mode refused" >&2
+    exit 1
+  fi
+  if ! validate_env "${DATA}/.env" || ! compose_allowed || ! compose_hash_ok "${DATA}/.env"; then
+    exit 1
+  fi
+else
+  if [[ ! -s "$tmp" ]]; then
+    rm -f -- "$tmp"
+    printf '%s\n' "env file missing" >&2
+    exit 1
+  fi
+  install_env "$tmp"
+fi
+
+case "$cmd" in
+  "docker compose pull") ;;
+  "docker compose up -d")
+    drop_compose_env
+    exec docker compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter up -d
+    ;;
+  "docker compose ps")
+    drop_compose_env
+    exec docker compose --env-file /srv/seo-exporter/data/.env -f /srv/seo-exporter/docker-compose.yml -p seo-exporter ps
+    ;;
+  *)
+    printf '%s\n' "command refused" >&2
+    exit 1
+    ;;
+esac

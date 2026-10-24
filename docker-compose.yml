@@ -1,0 +1,93 @@
+# Dedicated compose project for the read-only SEO exporter and its
+# Prometheus agent.
+# Provider APIs and remote_write need egress, so the network is not internal.
+name: seo-exporter
+
+services:
+  seo-exporter:
+    image: ${SEO_EXPORTER_IMAGE:?SEO_EXPORTER_IMAGE must be name@sha256:digest}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 128
+    networks:
+      - seo-exporter_net
+    env_file:
+      - path: data/.env
+        required: true
+    environment:
+      # env_file would inject the receiver password. Compose cannot delete
+      # one key from that file, so this override is empty.
+      SEO_REMOTE_WRITE_PASSWORD: ""
+      CREDENTIALS_DIRECTORY: /run/credentials/seo-exporter
+      SEO_EXPORTER_BIND: 0.0.0.0
+      SEO_EXPORTER_PORT: "9108"
+      SEO_EXPORTER_STATE_DIR: /var/lib/seo-exporter
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    tmpfs:
+      - /run/credentials:uid=10001,gid=10001,mode=0750
+      - /var/lib/seo-exporter:uid=10001,gid=10001,mode=0700
+      - /tmp:uid=10001,gid=10001,mode=1770
+    restart: unless-stopped
+
+  prometheus-agent:
+    # prom/prometheus:v3.15.1 linux/amd64 (same digest as the busybox tag)
+    image: prom/prometheus:v3.15.1@sha256:d445d1806b38f85b5c394a1b87f94113fde0473b45245922c2e8b1bd41fa68ae
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 64
+    networks:
+      - seo-exporter_net
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        umask 077
+        printf '%s\n' "$$PROMETHEUS_CONFIG" > /tmp/prometheus.yml
+        printf '%s' "$$SEO_REMOTE_WRITE_PASSWORD" > /tmp/remote_write_password
+        chmod 400 /tmp/remote_write_password
+        unset SEO_REMOTE_WRITE_PASSWORD
+        exec /bin/prometheus --agent --config.file=/tmp/prometheus.yml --storage.agent.path=/prometheus --web.listen-address=127.0.0.1:9090
+    environment:
+      SEO_REMOTE_WRITE_PASSWORD: ${SEO_REMOTE_WRITE_PASSWORD:?SEO_REMOTE_WRITE_PASSWORD is required}
+      PROMETHEUS_CONFIG: |
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 10s
+
+        scrape_configs:
+          - job_name: seo-exporter
+            metrics_path: /metrics
+            sample_limit: 1000
+            follow_redirects: false
+            static_configs:
+              - targets:
+                  - seo-exporter:9108
+
+        remote_write:
+          - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
+            follow_redirects: false
+            basic_auth:
+              username: seo-exporter
+              password_file: /tmp/remote_write_password
+            write_relabel_configs:
+              - source_labels: [__name__]
+                regex: seo_.*
+                action: keep
+    tmpfs:
+      - /prometheus:uid=65534,gid=65534,mode=0750
+      - /tmp:uid=65534,gid=65534,mode=1770
+    restart: unless-stopped
+
+networks:
+  seo-exporter_net:
+    name: seo-exporter_net
+    driver: bridge

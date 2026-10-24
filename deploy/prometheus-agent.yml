@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: seo-exporter
+    metrics_path: /metrics
+    sample_limit: 1000
+    follow_redirects: false
+    static_configs:
+      - targets:
+          - seo-exporter:9108
+
+remote_write:
+  - url: http://100.122.36.23:${SEO_REMOTE_WRITE_PORT:?SEO_REMOTE_WRITE_PORT is required}/api/v1/write
+    follow_redirects: false
+    basic_auth:
+      username: seo-exporter
+      password_file: /tmp/remote_write_password
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: seo_.*
+        action: keep
